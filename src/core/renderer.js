@@ -9,6 +9,7 @@
 import * as THREE from 'three';
 import { FaceLandmarker } from '@mediapipe/tasks-vision';
 import { buildTrianglesFromTesselation } from './triangulation.js';
+import { BustOverlayModel } from './bustOverlayModel.js';
 
 export class FaceMeshRenderer {
   constructor(canvasElement, videoElement = null) {
@@ -17,6 +18,12 @@ export class FaceMeshRenderer {
     this.isMirrored = true;
     this.showWebcam = true;
     this.isFaceTextureEnabled = true;
+    this.showBust = false;
+    this.minimalistMode = false;
+    this.autonomousRenderScale = 1;
+    this.faceMeshVisible = true;
+    this.faceMeshAlignment = { x: 0, y: -16.5, z: -9, scale: 95.5, pitch: 0, yaw: 0, roll: 0 };
+    this.normalFaceMeshAlignment = { x: 0, y: 0, z: 0, scale: 100, pitch: 0, yaw: 0, roll: 0 };
 
     // Texture Color Grading (1.0 = normal, 0.90 = -10%, etc.)
     this.textureContrast = 1;   // Contraste du masque (0.90 = 10% moins contrasté)
@@ -115,6 +122,16 @@ export class FaceMeshRenderer {
 
     // 8. Anatomical Black Oral Cavity (Noir dans la bouche)
     this.setupMouth();
+    this.setupLandmarkPoints();
+
+    // Keep the photo mask, eye stencil, eyes and mouth aligned as one layer.
+    this.faceMeshRoot = new THREE.Group();
+    this.faceMeshRoot.name = 'FaceMeshAlignment';
+    this.faceMeshRoot.add(this.maskMesh, this.eyeApertureMesh, this.eyeGroup, this.mouthMesh, this.landmarkPoints);
+    this.scene.add(this.faceMeshRoot);
+
+    // 9. Optional male/female OBJ cranium, neck and shoulders behind the mask
+    this.bustOverlay = new BustOverlayModel(this.scene);
   }
 
   setupVideoTexture() {
@@ -397,6 +414,25 @@ if (gl_FragColor.a < 0.005) discard;`
 
   }
 
+  setupLandmarkPoints() {
+    // Share the live vertex buffer, without the triangle index: one dot per landmark.
+    this.landmarkGeometry = new THREE.BufferGeometry();
+    this.landmarkGeometry.setAttribute('position', this.posAttribute);
+    this.landmarkGeometry.setDrawRange(0, 0);
+    this.landmarkMaterial = new THREE.PointsMaterial({
+      color: 0xffffff,
+      size: 2.5,
+      sizeAttenuation: false,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false
+    });
+    this.landmarkPoints = new THREE.Points(this.landmarkGeometry, this.landmarkMaterial);
+    this.landmarkPoints.name = 'MinimalistFaceMeshPoints';
+    this.landmarkPoints.frustumCulled = false;
+    this.landmarkPoints.visible = false;
+  }
+
   /**
    * Anatomical 3D Volumetric Oral Cavity & Pharynx Mesh
    * Constructs a true 3D spatial oral chamber with realistic depth into the skull:
@@ -462,6 +498,7 @@ if (gl_FragColor.a < 0.005) discard;`
 
     this.mouthMesh = new THREE.Mesh(this.mouthGeometry, this.mouthMaterial);
     this.mouthMesh.renderOrder = 8; // Renders right behind mask (10)
+    this.mouthMesh.visible = false;
     this.scene.add(this.mouthMesh);
   }
 
@@ -719,7 +756,7 @@ if (gl_FragColor.a < 0.005) discard;`
     const { x, y, pitch, yaw, roll, zoom } = this.cameraOffset;
 
     // Apply zoom to orthographic camera projection
-    this.camera.zoom = Math.max(0.1, zoom || 1.0);
+    this.camera.zoom = Math.max(0.1, zoom || 1.0) * this.autonomousRenderScale;
     this.camera.updateProjectionMatrix();
 
     const dist = 1000;
@@ -777,10 +814,12 @@ if (gl_FragColor.a < 0.005) discard;`
     this.videoElement.style.transform = `translate3d(${tx}px, ${ty}px, 0px) scale(${z}) rotateX(${rx}deg) rotateY(${ry}deg) rotateZ(${rz}deg) scaleX(${mirror})`;
   }
 
-  resize(displayWidth, displayHeight) {
+  resize(displayWidth, displayHeight, pixelRatio = null) {
     this.canvasWidth = displayWidth;
     this.canvasHeight = displayHeight;
-    this.dpr = Math.min(window.devicePixelRatio || 1, 2);
+    this.dpr = pixelRatio === null
+      ? Math.min(window.devicePixelRatio || 1, 2)
+      : Math.max(0.5, Math.min(2, pixelRatio));
 
     this.renderer.setPixelRatio(this.dpr);
     this.renderer.setSize(displayWidth, displayHeight, false);
@@ -918,21 +957,111 @@ if (gl_FragColor.a < 0.005) discard;`
   }
 
   setShowBust(show) {
-    this.showBust = false;
+    this.showBust = !!show;
+    this.bustOverlay?.setEnabled(this.showBust && !this.minimalistMode);
+    this.updateVisibility();
+  }
+
+  setMinimalistMode(enabled) {
+    this.minimalistMode = !!enabled;
+    this.renderer.setClearColor(0x000000, this.minimalistMode ? 1 : 0);
+    this.bustOverlay?.setEnabled(this.showBust && !this.minimalistMode);
+    this.updateVisibility();
+    this.clear();
+  }
+
+  setBustModel(modelName) {
+    this.bustOverlay?.setModel(modelName);
+  }
+
+  getFaceMeshAlignment(mode = this.showBust ? 'bust' : 'normal') {
+    return { ...(mode === 'bust' ? this.faceMeshAlignment : this.normalFaceMeshAlignment) };
+  }
+
+  updateAutonomousFraming(trackingResult) {
+    // Enlarge the complete composition while preserving face/bust alignment.
+    const weight = THREE.MathUtils.clamp(trackingResult.isAutonomous
+      ? (trackingResult.autonomousBlendWeight ?? 1)
+      : (trackingResult.blendToLiveWeight ?? 0), 0, 1);
+    this.autonomousRenderScale = 1 + 0.25 * weight;
+    const zoom = Math.max(0.1, this.cameraOffset.zoom || 1) * this.autonomousRenderScale;
+    if (this.camera.zoom !== zoom) {
+      this.camera.zoom = zoom;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
+  setFaceMeshAlignment(values = {}, mode = this.showBust ? 'bust' : 'normal') {
+    const alignment = mode === 'bust' ? this.faceMeshAlignment : this.normalFaceMeshAlignment;
+    for (const [key, min, max] of [['x', -50, 50], ['y', -50, 50], ['z', -100, 100], ['scale', 50, 150], ['pitch', -45, 45], ['yaw', -45, 45], ['roll', -30, 30]]) {
+      if (Number.isFinite(values[key])) {
+        alignment[key] = Math.max(min, Math.min(max, values[key]));
+      }
+    }
+  }
+
+  setFaceMeshVisible(visible) {
+    this.faceMeshVisible = !!visible;
+    this.updateVisibility();
+  }
+
+  updateFaceMeshAlignment(poseLandmarks = null, renderW = 1, renderH = 1, depthScale = 1) {
+    const root = this.faceMeshRoot;
+    root.position.set(0, 0, 0);
+    root.scale.setScalar(1);
+    root.quaternion.identity();
+
+    // Use the tracked head axes so the adjustment follows turns and head size.
+    const point = index => {
+      const lm = poseLandmarks?.[index];
+      if (!lm) return new THREE.Vector3().fromArray(this.positions, index * 3);
+      const x = this.isMirrored ? 1 - lm.x : lm.x;
+      return new THREE.Vector3((x - 0.5) * renderW, (0.5 - lm.y) * renderH, -(lm.z || 0) * depthScale);
+    };
+    const eyeA = point(33).add(point(133)).multiplyScalar(0.5);
+    const eyeB = point(263).add(point(362)).multiplyScalar(0.5);
+    const eyeDistance = eyeA.distanceTo(eyeB);
+    if (eyeDistance < 0.001) return;
+    const axisX = new THREE.Vector3().subVectors(eyeA.x <= eyeB.x ? eyeB : eyeA, eyeA.x <= eyeB.x ? eyeA : eyeB).normalize();
+    const axisY = point(10).sub(point(152));
+    axisY.addScaledVector(axisX, -axisY.dot(axisX));
+    if (axisY.lengthSq() < 0.000001) return;
+    axisY.normalize();
+    const axisZ = new THREE.Vector3().crossVectors(axisX, axisY).normalize();
+    const pivot = eyeA.add(eyeB).multiplyScalar(0.5);
+    const { x, y, z, scale, pitch, yaw, roll } = this.getFaceMeshAlignment();
+    const factor = scale / 100;
+    // Rotate around the eye midpoint in the tracked head's local axes so the
+    // correction follows the visitor and autonomous motion without moving the bust.
+    const headRotation = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(axisX, axisY, axisZ));
+    const localRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+      THREE.MathUtils.degToRad(-pitch),
+      THREE.MathUtils.degToRad(yaw),
+      THREE.MathUtils.degToRad(-roll),
+      'YXZ'
+    ));
+    root.quaternion.copy(headRotation).multiply(localRotation).multiply(headRotation.clone().invert());
+    root.scale.setScalar(factor);
+    root.position.copy(pivot).sub(pivot.clone().applyQuaternion(root.quaternion).multiplyScalar(factor))
+      .addScaledVector(axisX, x * eyeDistance / 100)
+      .addScaledVector(axisY, y * eyeDistance / 100)
+      .addScaledVector(axisZ, z * eyeDistance / 100);
   }
 
   updateVisibility() {
     if (this.webcamBackgroundGroup) {
-      this.webcamBackgroundGroup.visible = this.showWebcam && this.isAutonomousActive;
+      this.webcamBackgroundGroup.visible = !this.minimalistMode && !this.showBust && this.showWebcam && this.isAutonomousActive;
     }
 
-    this.maskMesh.visible = true;
-    this.eyeGroup.visible = true;
+    const showSurface = this.faceMeshVisible && !this.minimalistMode;
+    this.maskMesh.visible = showSurface;
+    this.eyeGroup.visible = showSurface;
+    if (this.landmarkPoints) this.landmarkPoints.visible = this.faceMeshVisible && this.minimalistMode;
     if (this.eyeApertureMesh) {
       this.eyeApertureMesh.visible = this.eyeGroup.visible;
     }
     if (this.mouthMesh) {
-      this.mouthMesh.visible = true;
+      this.mouthMesh.visible = showSurface && !!this.isAutonomousActive;
     }
 
     // Always use textured material when available, fallback to maskMaterial before texture is loaded
@@ -1163,6 +1292,7 @@ if (gl_FragColor.a < 0.005) discard;`
     }
 
     this.posAttribute.needsUpdate = true;
+    this.landmarkGeometry.setDrawRange(0, len);
     this.uvAttribute.needsUpdate = true;
     this.geometry.computeVertexNormals();
 
@@ -1179,16 +1309,17 @@ if (gl_FragColor.a < 0.005) discard;`
     // Update 3D Eyeballs, Irises, and Pupils
     this.update3DEyes(landmarks, renderW, renderH, depthScale);
 
-    // Update 3D Volumetric Anatomical Oral Cavity
-    this.updateOralCavity(renderW, renderH, depthScale);
-
-    // Autonomous 3D Attached Webcam Plane Update
     const isAutonomous = !!trackingResult.isAutonomous;
     this.isAutonomousActive = isAutonomous;
 
+    // Keep the live mouth texture unobscured; use the dark cavity only in autonomous mode.
+    this.mouthMesh.visible = this.faceMeshVisible && !this.minimalistMode && isAutonomous;
+    this.updateOralCavity(renderW, renderH, depthScale);
+
+    // Autonomous 3D Attached Webcam Plane Update
     const blendToLiveWeight = trackingResult.blendToLiveWeight !== undefined ? trackingResult.blendToLiveWeight : null;
     const isReturningToLive = blendToLiveWeight !== null && blendToLiveWeight > 0.005;
-    const shouldShowPlane = this.showWebcam && (isAutonomous || isReturningToLive) && (this.freezeTexture || this.videoTexture);
+    const shouldShowPlane = !this.minimalistMode && !this.showBust && this.showWebcam && (isAutonomous || isReturningToLive) && (this.freezeTexture || this.videoTexture);
 
     if (this.webcamBackgroundGroup) {
       if (shouldShowPlane) {
@@ -1256,6 +1387,11 @@ if (gl_FragColor.a < 0.005) discard;`
         }
       }
     }
+
+    // Optional OBJ layer follows the exact same tracked/autonomous head frame.
+    this.bustOverlay?.update(trackingResult.poseLandmarks || landmarks, renderW, renderH, depthScale, this.isMirrored);
+    this.updateFaceMeshAlignment(trackingResult.poseLandmarks, renderW, renderH, depthScale);
+    this.updateAutonomousFraming(trackingResult);
 
     // Render WebGL scene
     this.renderer.render(this.scene, this.camera);

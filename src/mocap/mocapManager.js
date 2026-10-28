@@ -1,6 +1,6 @@
 /**
  * Motion Capture Manager
- * Modular telemetry, recording, and streaming engine for 52 facial blendshapes, head pose, and 3D landmarks.
+ * Modular telemetry and streaming engine for 52 facial blendshapes, head pose, and 3D landmarks.
  */
 
 export const BLENDSHAPE_CATEGORIES = {
@@ -32,23 +32,20 @@ export const BLENDSHAPE_CATEGORIES = {
 export class MocapManager extends EventTarget {
   constructor() {
     super();
-    this.isRecording = false;
-    this.recordedFrames = [];
-    this.recordingStartTime = 0;
     this.ws = null;
     this.wsConnected = false;
     this.lastFrameData = null;
   }
 
   /**
-   * Dispatches a live frame packet and records if recording is active
+   * Dispatches and streams a live frame packet
    */
   processFrame(trackingResult) {
     if (!trackingResult || !trackingResult.detected) return;
 
     const framePacket = {
       timestamp: trackingResult.timestamp,
-      timeOffsetMs: this.isRecording ? (trackingResult.timestamp - this.recordingStartTime) : 0,
+      timeOffsetMs: 0,
       headPose: {
         pitch: Number(trackingResult.headPose?.pitch?.toFixed(3) || 0),
         yaw: Number(trackingResult.headPose?.yaw?.toFixed(3) || 0),
@@ -75,105 +72,6 @@ export class MocapManager extends EventTarget {
       }
     }
 
-    // Buffer frame if recording
-    if (this.isRecording) {
-      this.recordedFrames.push(framePacket);
-    }
-  }
-
-  startRecording() {
-    this.recordedFrames = [];
-    this.recordingStartTime = performance.now();
-    this.isRecording = true;
-    this.dispatchEvent(new CustomEvent('recording:start'));
-  }
-
-  stopRecording() {
-    if (!this.isRecording) return null;
-    this.isRecording = false;
-    const durationSec = (performance.now() - this.recordingStartTime) / 1000;
-    const summary = {
-      frameCount: this.recordedFrames.length,
-      durationSec: Number(durationSec.toFixed(2)),
-      avgFps: Number((this.recordedFrames.length / Math.max(0.01, durationSec)).toFixed(1))
-    };
-    this.dispatchEvent(new CustomEvent('recording:stop', { detail: summary }));
-    return summary;
-  }
-
-  /**
-   * Export recorded motion capture animation sequence as JSON
-   */
-  exportJSON(filename = 'mocap_face_track.json') {
-    if (this.recordedFrames.length === 0) {
-      alert('No recorded motion capture data to export.');
-      return;
-    }
-
-    const mocapData = {
-      metadata: {
-        version: '1.0',
-        creator: 'Photomaton FaceMesh MoCap',
-        date: new Date().toISOString(),
-        totalFrames: this.recordedFrames.length,
-        durationSeconds: this.recordedFrames.length > 0 
-          ? (this.recordedFrames[this.recordedFrames.length - 1].timeOffsetMs / 1000) 
-          : 0
-      },
-      frames: this.recordedFrames
-    };
-
-    const blob = new Blob([JSON.stringify(mocapData, null, 2)], { type: 'application/json' });
-    this.downloadBlob(blob, filename);
-  }
-
-  /**
-   * Export recorded motion capture as CSV (Blendshapes + Head Pose columns)
-   */
-  exportCSV(filename = 'mocap_face_track.csv') {
-    if (this.recordedFrames.length === 0) {
-      alert('No recorded motion capture data to export.');
-      return;
-    }
-
-    const firstFrame = this.recordedFrames[0];
-    const blendshapeKeys = Object.keys(firstFrame.blendshapes);
-
-    const headers = [
-      'TimeOffsetMs',
-      'Pitch', 'Yaw', 'Roll',
-      'PosX', 'PosY', 'PosZ',
-      ...blendshapeKeys
-    ];
-
-    const rows = this.recordedFrames.map(f => {
-      const bsValues = blendshapeKeys.map(k => (f.blendshapes[k] !== undefined ? f.blendshapes[k].toFixed(4) : '0'));
-      return [
-        f.timeOffsetMs.toFixed(1),
-        f.headPose.pitch,
-        f.headPose.yaw,
-        f.headPose.roll,
-        f.headPose.x,
-        f.headPose.y,
-        f.headPose.z,
-        ...bsValues
-      ].join(',');
-    });
-
-    const csvContent = [headers.join(','), ...rows].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv' });
-    this.downloadBlob(blob, filename);
-  }
-
-  downloadBlob(blob, filename) {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
   }
 
   /**

@@ -49,10 +49,8 @@ function buildEyeWeightsMap() {
 export class ExpressionLooper extends EventTarget {
   constructor() {
     super();
-    this.isRecording = false;
     this.isPlaying = false;
     this.recordedFrames = [];
-    this.recordingStartTime = 0;
     this.playbackStartTime = 0;
     this.loopDurationMs = 0;
     this.playbackSpeed = 1.0;
@@ -115,11 +113,9 @@ export class ExpressionLooper extends EventTarget {
     // Previous playback frame for real-time temporal interpolation
     this.lastPlaybackLocal = null;
 
-    // True neutral resting face tracking for full-fidelity recording
+    // Neutral resting face tracking for imported performance retargeting
     this.lastStableNeutralLocal = null;
     this.lastStableNeutralHeadPose = null;
-    this.preRecordNeutralLocal = null;
-    this.preRecordNeutralHeadPose = null;
     this.referenceHeadPose = null;
     this.unloopedFrames = null;
   }
@@ -157,32 +153,8 @@ export class ExpressionLooper extends EventTarget {
     this.setExpressionBlend(val);
   }
 
-  startRecording(startTime = null) {
-    this.recordedFrames = [];
-    this.unloopedFrames = null;
-    this.recordingStartTime = startTime || performance.now();
-    this.isRecording = true;
-    this.isPlaying = false;
-    this.lastPlaybackLocal = null;
-    // Capture user's resting neutral face at recording onset
-    if (this.lastStableNeutralLocal) {
-      this.preRecordNeutralLocal = this.lastStableNeutralLocal.map(p => ({ x: p.x, y: p.y, z: p.z }));
-      this.preRecordNeutralHeadPose = this.lastStableNeutralHeadPose ? { ...this.lastStableNeutralHeadPose } : null;
-    } else {
-      this.preRecordNeutralLocal = null;
-      this.preRecordNeutralHeadPose = null;
-    }
-    this.dispatchEvent(new CustomEvent('recording:start'));
-  }
-
-  stopRecording() {
-    if (!this.isRecording) return;
-    this.isRecording = false;
-    this.finalizeRecordedFrames();
-  }
-
   /**
-   * Exports the currently recorded performance as an animation data package
+   * Exports the currently imported performance as an animation data package
    * with pristine linear fidelity, preserving the full acted expression.
    */
   exportAnimation(name = 'Expression', audioData = null) {
@@ -227,10 +199,9 @@ export class ExpressionLooper extends EventTarget {
    */
   loadRecordedFrames(frames, customDurationMs = null) {
     if (!frames || frames.length === 0) return;
-    this.isRecording = false;
     this.recordedFrames = frames;
     this.finalizeRecordedFrames(customDurationMs);
-    this.dispatchEvent(new CustomEvent('recording:loaded', {
+    this.dispatchEvent(new CustomEvent('performance:loaded', {
       detail: {
         frameCount: this.recordedFrames.length,
         durationMs: this.loopDurationMs
@@ -424,7 +395,7 @@ export class ExpressionLooper extends EventTarget {
       this.lastPlaybackLocal = null;
     }
 
-    this.dispatchEvent(new CustomEvent('recording:stop', {
+    this.dispatchEvent(new CustomEvent('performance:ready', {
       detail: {
         frameCount: this.recordedFrames.length,
         durationMs: this.loopDurationMs
@@ -463,7 +434,6 @@ export class ExpressionLooper extends EventTarget {
   }
 
   clear() {
-    this.isRecording = false;
     this.isPlaying = false;
     this.recordedFrames = [];
     this.loopDurationMs = 0;
@@ -510,19 +480,6 @@ export class ExpressionLooper extends EventTarget {
     // Collect calibration samples during calibration
     if (this.calibrator.isCalibrating) {
       this.calibLandmarkSamples.push(liveLocal);
-    }
-
-    // 1. Record frame in pure head-local space + head pose
-    if (this.isRecording) {
-      if (!this.preRecordNeutralLocal) {
-        this.preRecordNeutralLocal = liveLocal.map(p => ({ x: p.x, y: p.y, z: p.z }));
-      }
-      this.recordedFrames.push({
-        timeOffsetMs: now - this.recordingStartTime,
-        localCoords: liveLocal,
-        blendshapes: calibratedBlendshapes,
-        headPose: trackingResult.headPose ? { ...trackingResult.headPose } : null
-      });
     }
 
     // 2. Return live tracking if playback inactive (1:1 with webcam, no synthetic warping)

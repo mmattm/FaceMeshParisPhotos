@@ -1,11 +1,11 @@
 /**
  * WebRTC Canvas Stream Broadcaster
  * 
- * Captures the clean WebGL canvas stream (zero UI, pure video) and broadcasts it
- * directly to a second computer over WebRTC peer-to-peer connection.
+ * Composites the live webcam background with the clean WebGL overlay (zero UI)
+ * and broadcasts the resulting image directly over WebRTC peer-to-peer.
  * 
  * Features:
- * - Direct canvas stream capture at 30/60 FPS via canvas.captureStream().
+ * - Fixed square output (1080x1080) at 30 FPS via a dedicated broadcast canvas.
  * - Real-time WebSocket signaling via /webrtc-signaling on the Vite dev server.
  * - Multi-peer support: multiple second computers/displays can connect simultaneously.
  * - Auto-reconnection & ICE candidate negotiation.
@@ -17,7 +17,16 @@ export class CanvasBroadcaster extends EventTarget {
   constructor(canvasElement, options = {}) {
     super();
     this.canvas = canvasElement;
+    this.videoElement = options.videoElement || null;
+    this.isMirrored = options.mirrored !== false;
+    this.liveBackgroundEnabled = true;
     this.fps = options.fps || 30;
+    this.outputWidth = options.width || 1080;
+    this.outputHeight = options.height || 1080;
+    this.broadcastCanvas = null;
+    this.broadcastCtx = null;
+    this.framePumpId = null;
+    this.lastFrameDrawTime = 0;
     this.stream = null;
     this.ws = null;
     this.peers = new Map(); // viewerId -> { pc, dc }
@@ -37,20 +46,153 @@ export class CanvasBroadcaster extends EventTarget {
   initStream() {
     if (!this.canvas) return;
     try {
-      if (typeof this.canvas.captureStream === 'function') {
-        this.stream = this.canvas.captureStream(this.fps);
-      } else if (typeof this.canvas.mozCaptureStream === 'function') {
-        this.stream = this.canvas.mozCaptureStream(this.fps);
+      if (!this.broadcastCanvas) {
+        this.broadcastCanvas = document.createElement('canvas');
+        this.broadcastCanvas.width = this.outputWidth;
+        this.broadcastCanvas.height = this.outputHeight;
+        this.broadcastCtx = this.broadcastCanvas.getContext('2d', {
+          alpha: false,
+          desynchronized: true
+        });
+        this.drawBroadcastFrame();
+        this.startFramePump();
       }
-      console.log('[WebRTC Broadcaster] 🎥 Canvas stream capturé avec succès (30 FPS)');
+
+      if (typeof this.broadcastCanvas.captureStream === 'function') {
+        this.stream = this.broadcastCanvas.captureStream(this.fps);
+      } else if (typeof this.broadcastCanvas.mozCaptureStream === 'function') {
+        this.stream = this.broadcastCanvas.mozCaptureStream(this.fps);
+      }
+      const track = this.stream?.getVideoTracks?.()[0];
+      if (track) track.contentHint = 'detail';
+      console.log(`[WebRTC Broadcaster] Canvas ${this.outputWidth}x${this.outputHeight} capturé à ${this.fps} FPS`);
     } catch (e) {
       console.error('[WebRTC Broadcaster] Erreur capture canvas stream:', e);
     }
   }
 
+  drawBroadcastFrame() {
+    if (!this.broadcastCtx || !this.canvas) return;
+    const sourceWidth = this.canvas.width || this.canvas.clientWidth || this.outputWidth;
+    const sourceHeight = this.canvas.height || this.canvas.clientHeight || this.outputHeight;
+    if (sourceWidth <= 0 || sourceHeight <= 0) return;
+
+    // Center-crop the fixed 16:9 renderer into the square output. Using cover
+    // avoids both distortion and black bars while keeping the face centered.
+    const scale = Math.max(this.outputWidth / sourceWidth, this.outputHeight / sourceHeight);
+    const drawWidth = Math.round(sourceWidth * scale);
+    const drawHeight = Math.round(sourceHeight * scale);
+    const offsetX = Math.round((this.outputWidth - drawWidth) * 0.5);
+    const offsetY = Math.round((this.outputHeight - drawHeight) * 0.5);
+
+    this.broadcastCtx.fillStyle = '#000000';
+    this.broadcastCtx.fillRect(0, 0, this.outputWidth, this.outputHeight);
+
+    // In LIVE mode the webcam is an HTML element behind the transparent WebGL
+    // canvas, so rebuild that same composition inside the captured canvas.
+    if (this.liveBackgroundEnabled && this.videoElement?.readyState >= 2) {
+      this.drawVideoCover(this.videoElement, offsetX, offsetY, drawWidth, drawHeight);
+    }
+
+    // The WebGL canvas contains the mask in LIVE mode and the complete frozen
+    // autonomous composition in AUTONOMOUS mode.
+    this.broadcastCtx.drawImage(this.canvas, offsetX, offsetY, drawWidth, drawHeight);
+  }
+
+  drawVideoCover(video, destX, destY, destWidth, destHeight) {
+    const videoWidth = video.videoWidth || 0;
+    const videoHeight = video.videoHeight || 0;
+    if (!videoWidth || !videoHeight || !destWidth || !destHeight) return;
+
+    const videoAspect = videoWidth / videoHeight;
+    const destAspect = destWidth / destHeight;
+    let sourceX = 0;
+    let sourceY = 0;
+    let sourceWidth = videoWidth;
+    let sourceHeight = videoHeight;
+
+    // Match CSS object-fit: cover used by the local LIVE background.
+    if (videoAspect > destAspect) {
+      sourceWidth = videoHeight * destAspect;
+      sourceX = (videoWidth - sourceWidth) * 0.5;
+    } else {
+      sourceHeight = videoWidth / destAspect;
+      sourceY = (videoHeight - sourceHeight) * 0.5;
+    }
+
+    this.broadcastCtx.save();
+    this.broadcastCtx.beginPath();
+    this.broadcastCtx.rect(destX, destY, destWidth, destHeight);
+    this.broadcastCtx.clip();
+    if (this.isMirrored) {
+      this.broadcastCtx.translate(destX + destWidth, destY);
+      this.broadcastCtx.scale(-1, 1);
+      this.broadcastCtx.drawImage(
+        video,
+        sourceX, sourceY, sourceWidth, sourceHeight,
+        0, 0, destWidth, destHeight
+      );
+    } else {
+      this.broadcastCtx.drawImage(
+        video,
+        sourceX, sourceY, sourceWidth, sourceHeight,
+        destX, destY, destWidth, destHeight
+      );
+    }
+    this.broadcastCtx.restore();
+  }
+
+  setMirrored(mirrored) {
+    this.isMirrored = !!mirrored;
+  }
+
+  setLiveBackgroundEnabled(enabled) {
+    this.liveBackgroundEnabled = !!enabled;
+  }
+
+  startFramePump() {
+    if (this.framePumpId !== null) return;
+    const frameInterval = 1000 / this.fps;
+    const pump = (now) => {
+      if (now - this.lastFrameDrawTime >= frameInterval) {
+        this.drawBroadcastFrame();
+        this.lastFrameDrawTime = now;
+      }
+      this.framePumpId = requestAnimationFrame(pump);
+    };
+    this.framePumpId = requestAnimationFrame(pump);
+  }
+
   getStream() {
     if (!this.stream) this.initStream();
     return this.stream;
+  }
+
+  async setAudioStream(audioStream) {
+    const stream = this.getStream();
+    if (!stream || !audioStream) return;
+    const existing = new Set(stream.getAudioTracks().map(track => track.id));
+    const tracks = audioStream.getAudioTracks().filter(track => !existing.has(track.id));
+    if (!tracks.length) return;
+    for (const track of tracks) stream.addTrack(track);
+    // Existing receivers need a new offer to pick up the added audio track.
+    await Promise.all([...this.peers.keys()].map(viewerId => this.createPeerForViewer(viewerId)));
+  }
+
+  /**
+   * Mounts the actual WebRTC capture canvas in the operator UI. Because this
+   * is the same canvas used by captureStream(), the preview exactly matches
+   * the image sent to every WebRTC receiver.
+   */
+  mountPreview(container) {
+    if (!container || !this.broadcastCanvas) return;
+    this.broadcastCanvas.classList.add('webrtc-preview-canvas');
+    this.broadcastCanvas.setAttribute('aria-label', 'Flux vidéo envoyé par WebRTC');
+    container.style.aspectRatio = `${this.outputWidth} / ${this.outputHeight}`;
+    container.replaceChildren(this.broadcastCanvas);
+
+    const meta = document.getElementById('webrtc-preview-meta');
+    if (meta) meta.textContent = `${this.outputWidth}×${this.outputHeight} · ${this.fps} FPS`;
   }
 
   connectSignaling() {
@@ -138,8 +280,24 @@ export class CanvasBroadcaster extends EventTarget {
     const stream = this.getStream();
     if (stream) {
       stream.getVideoTracks().forEach(track => {
-        pc.addTrack(track, stream);
+        const sender = pc.addTrack(track, stream);
+        try {
+          const parameters = sender.getParameters();
+          parameters.degradationPreference = 'maintain-resolution';
+          if (!parameters.encodings || parameters.encodings.length === 0) {
+            parameters.encodings = [{}];
+          }
+          parameters.encodings[0].maxFramerate = this.fps;
+          parameters.encodings[0].maxBitrate = 8_000_000;
+          parameters.encodings[0].scaleResolutionDownBy = 1;
+          sender.setParameters(parameters).catch(() => {
+            // Some browsers only expose these encoding preferences after negotiation.
+          });
+        } catch (error) {
+          // Encoding preferences are optional; the source track keeps its native size.
+        }
       });
+      stream.getAudioTracks().forEach(track => pc.addTrack(track, stream));
     }
 
     // ICE Candidate generation
@@ -156,6 +314,7 @@ export class CanvasBroadcaster extends EventTarget {
 
     // Connection state changes
     pc.onconnectionstatechange = () => {
+      if (this.peers.get(viewerId) !== peerData) return;
       console.log(`[WebRTC Broadcaster] État pair ${viewerId}: ${pc.connectionState}`);
       if (pc.connectionState === 'connected') {
         this.totalConnectedViewers = this.getConnectedCount();
@@ -219,14 +378,13 @@ export class CanvasBroadcaster extends EventTarget {
   /**
    * Called immediately whenever a new visitor is confirmed.
    * Dispatches the required 'photomaton:webrtc-started' event,
-   * notifies all connected second computers over WebSocket & WebRTC DataChannel,
-   * and refreshes the canvas video stream transmission.
+   * and notifies all connected second computers without capturing an image.
    */
   notifyNewVisitor(visitorDetail = {}) {
     const stream = this.getStream();
     const timestamp = Date.now();
 
-    console.log('[WebRTC Broadcaster] 🚀 Démarrage protocole WebRTC pour nouveau visiteur', visitorDetail);
+    console.log('[WebRTC Broadcaster] Nouveau visiteur', { visitorDetail });
 
     // 1. Dispatch custom event on window
     const eventDetail = {
@@ -239,23 +397,24 @@ export class CanvasBroadcaster extends EventTarget {
     window.dispatchEvent(new CustomEvent('photomaton:webrtc-started', { detail: eventDetail }));
     this.dispatchEvent(new CustomEvent('webrtc-started', { detail: eventDetail }));
 
-    // 2. Broadcast new visitor alert via WebSocket signaling
+    // 2. Broadcast a lightweight visitor alert via WebSocket signaling.
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({
         type: 'new-visitor-alert',
+        visitorId: visitorDetail.visitorId,
         timestamp,
         reason: visitorDetail.reason || 'NEW_VISITOR',
         dissimilarity: visitorDetail.dissimilarity || 0
       }));
     }
 
-    // 3. Send over DataChannels to all connected computers
+    // 3. Send the same lightweight alert over WebRTC DataChannel.
     const dcPayload = JSON.stringify({
       type: 'new-visitor',
+      visitorId: visitorDetail.visitorId,
       timestamp,
       reason: visitorDetail.reason || 'NEW_VISITOR'
     });
-
     for (const [_, peerData] of this.peers) {
       if (peerData.dc && peerData.dc.readyState === 'open') {
         try {

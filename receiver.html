@@ -3,211 +3,71 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Photomaton - Récepteur WebRTC (Deuxième Ordinateur)</title>
+  <title>Photomaton - Récepteur WebRTC</title>
   <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; height: 100%; overflow: hidden; background: #000; color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
-
-    body, html {
-      width: 100%;
-      height: 100%;
-      background: #000000;
-      color: #ffffff;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      overflow: hidden;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
     .video-container {
-      position: relative;
-      width: 100vw;
-      height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: #000000;
+      position: relative; width: 100vw; height: 100vh; display: flex;
+      align-items: center; justify-content: center; background: #000;
     }
-
-    #remote-video {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      background: #000000;
-      display: block;
-    }
-
-    /* Subtle Floating HUD Overlay */
+    #remote-video { width: 100%; height: 100%; object-fit: contain; background: #000; }
     .hud-overlay {
-      position: absolute;
-      top: 20px;
-      left: 20px;
-      right: 20px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      pointer-events: none;
-      z-index: 100;
-      opacity: 1;
-      transition: opacity 0.8s ease;
+      position: absolute; top: 20px; left: 20px; right: 20px; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      pointer-events: none; transition: opacity 0.8s ease;
     }
-
-    .hud-overlay.faded {
-      opacity: 0;
+    .hud-overlay.faded { opacity: 0; }
+    .hud-badge, .hud-btn {
+      display: flex; align-items: center; gap: 9px; padding: 8px 14px;
+      border: 1px solid rgba(255,255,255,.12); border-radius: 9px;
+      background: rgba(18,20,24,.75); backdrop-filter: blur(12px);
+      color: #fff; font-size: 12px;
     }
-
-    .hud-badge {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      background: rgba(18, 20, 24, 0.75);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      padding: 8px 16px;
-      border-radius: 999px;
-      font-size: 13px;
-      letter-spacing: 0.5px;
-      font-weight: 500;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-    }
-
+    .hud-btn { pointer-events: auto; cursor: pointer; }
+    .hud-btn:hover { background: rgba(255,255,255,.15); }
     .status-dot {
-      width: 9px;
-      height: 9px;
-      border-radius: 50%;
-      background: #f59e0b; /* Yellow: Connecting */
+      width: 9px; height: 9px; border-radius: 50%; background: #f59e0b;
       box-shadow: 0 0 12px #f59e0b;
-      transition: all 0.3s ease;
     }
-
-    .status-dot.connected {
-      background: #10b981; /* Green: Live stream */
-      box-shadow: 0 0 14px #10b981;
-    }
-
-    .status-dot.disconnected {
-      background: #ef4444; /* Red: Disconnected */
-      box-shadow: 0 0 12px #ef4444;
-    }
-
-    .hud-actions {
-      display: flex;
-      gap: 10px;
-      pointer-events: auto;
-    }
-
-    .hud-btn {
-      background: rgba(18, 20, 24, 0.75);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      backdrop-filter: blur(12px);
-      color: #ffffff;
-      padding: 8px 14px;
-      border-radius: 8px;
-      font-size: 12px;
-      cursor: pointer;
-      transition: all 0.2s ease;
-    }
-
-    .hud-btn:hover {
-      background: rgba(255, 255, 255, 0.15);
-      border-color: rgba(255, 255, 255, 0.25);
-    }
-
-    /* Visitor Flash Alert Border */
-    .visitor-flash {
-      position: absolute;
-      inset: 0;
-      border: 3px solid #10b981;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 0.4s ease;
-      z-index: 50;
-    }
-
-    .visitor-flash.active {
-      opacity: 0.85;
-      animation: pulseBorder 1.5s ease-out;
-    }
-
-    @keyframes pulseBorder {
-      0% { opacity: 1; }
-      50% { opacity: 0.5; }
-      100% { opacity: 0; }
-    }
-
-    /* Center Placeholder Message when waiting */
+    .status-dot.connected { background: #10b981; box-shadow: 0 0 14px #10b981; }
+    .status-dot.disconnected { background: #ef4444; box-shadow: 0 0 12px #ef4444; }
     .waiting-screen {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      background: #08090b;
-      gap: 16px;
-      z-index: 10;
-      transition: opacity 0.6s ease;
+      position: absolute; inset: 0; z-index: 10; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 16px; background: #08090b;
+      transition: opacity .6s ease;
     }
-
-    .waiting-screen.hidden {
-      opacity: 0;
-      pointer-events: none;
-    }
-
-    .waiting-title {
-      font-size: 20px;
-      font-weight: 600;
-      letter-spacing: -0.3px;
-    }
-
+    .waiting-screen.hidden { opacity: 0; pointer-events: none; }
+    .waiting-title { font-size: 20px; font-weight: 600; }
     .waiting-subtitle {
-      font-size: 14px;
-      color: rgba(255, 255, 255, 0.5);
-      text-align: center;
-      max-width: 420px;
-      line-height: 1.5;
+      max-width: 430px; color: rgba(255,255,255,.5); font-size: 14px;
+      line-height: 1.5; text-align: center;
     }
-
     .spinner {
-      width: 38px;
-      height: 38px;
-      border: 3px solid rgba(255, 255, 255, 0.1);
-      border-top-color: #3b82f6;
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
+      width: 38px; height: 38px; border: 3px solid rgba(255,255,255,.1);
+      border-top-color: #3b82f6; border-radius: 50%; animation: spin 1s linear infinite;
     }
-
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
-  <div class="video-container" id="container">
+  <div class="video-container">
     <video id="remote-video" autoplay playsinline muted></video>
-    <div id="visitor-flash" class="visitor-flash"></div>
-
     <div class="hud-overlay" id="hud">
       <div class="hud-badge">
         <span class="status-dot" id="status-dot"></span>
-        <span id="status-text">Connexion au Photomaton...</span>
+        <span id="status-text">Connexion au Photomaton…</span>
       </div>
-      <div class="hud-actions">
-        <button class="hud-btn" id="btn-fullscreen" title="Basculer Plein Écran (F)">⛶ Plein Écran</button>
-      </div>
+      <button class="hud-btn" id="btn-audio" type="button" aria-pressed="false">🔇 Activer le son</button>
+      <button class="hud-btn" id="btn-fullscreen" type="button">⛶ Plein écran</button>
     </div>
-
     <div class="waiting-screen" id="waiting-screen">
       <div class="spinner"></div>
-      <div class="waiting-title">En attente du flux Photomaton...</div>
-      <div class="waiting-subtitle">
-        Ce récepteur WebRTC affiche en direct le flux vidéo pur du canvas de la première machine, sans interface.
-      </div>
+      <div class="waiting-title">En attente du flux Photomaton…</div>
+      <div class="waiting-subtitle">Ce récepteur affiche le flux WebRTC. Activez le son pour entendre les presets. Aucune capture visiteur n’est enregistrée.</div>
     </div>
   </div>
 
@@ -217,14 +77,20 @@
     const statusText = document.getElementById('status-text');
     const hud = document.getElementById('hud');
     const waitingScreen = document.getElementById('waiting-screen');
-    const flashEl = document.getElementById('visitor-flash');
     const btnFullscreen = document.getElementById('btn-fullscreen');
+    const btnAudio = document.getElementById('btn-audio');
+    btnAudio.addEventListener('click', () => {
+      videoEl.muted = !videoEl.muted;
+      btnAudio.textContent = videoEl.muted ? '🔇 Activer le son' : '🔊 Son activé';
+      btnAudio.setAttribute('aria-pressed', String(!videoEl.muted));
+      videoEl.play().catch(() => {});
+      showHUDTemporarily();
+    });
 
     let pc = null;
     let ws = null;
-    let viewerId = 'viewer_' + Math.floor(Math.random() * 100000);
     let hudTimeout = null;
-
+    const viewerId = `viewer_${Math.floor(Math.random() * 100000)}`;
     const iceServers = [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' }
@@ -234,181 +100,95 @@
       hud.classList.remove('faded');
       if (hudTimeout) clearTimeout(hudTimeout);
       hudTimeout = setTimeout(() => {
-        if (pc && pc.connectionState === 'connected') {
-          hud.classList.add('faded');
-        }
+        if (pc?.connectionState === 'connected') hud.classList.add('faded');
       }, 4000);
     }
 
-    document.addEventListener('mousemove', showHUDTemporarily);
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'f' || e.key === 'F') {
-        toggleFullscreen();
-      }
-    });
-
-    btnFullscreen.addEventListener('click', toggleFullscreen);
-
     function toggleFullscreen() {
-      if (!document.fullscreenElement) {
-        document.documentElement.requestFullscreen().catch(() => {});
-      } else {
-        document.exitFullscreen().catch(() => {});
-      }
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
+      else document.exitFullscreen().catch(() => {});
     }
+
+    document.addEventListener('mousemove', showHUDTemporarily);
+    document.addEventListener('keydown', event => {
+      if (event.key.toLowerCase() === 'f') toggleFullscreen();
+    });
+    btnFullscreen.addEventListener('click', toggleFullscreen);
 
     function connectSignaling() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const signalingUrl = `${protocol}//${window.location.host}/webrtc-signaling`;
-
       statusDot.className = 'status-dot';
-      statusText.textContent = 'Connexion au serveur...';
-
-      try {
-        ws = new WebSocket(signalingUrl);
-
-        ws.onopen = () => {
-          console.log('[WebRTC Receiver] Connecté au serveur de signalement');
-          statusText.textContent = 'En attente de l\'ordinateur émetteur...';
-          ws.send(JSON.stringify({ type: 'register', role: 'viewer', viewerId }));
-        };
-
-        ws.onmessage = async (evt) => {
-          try {
-            const msg = JSON.parse(evt.data);
-            await handleSignalingMessage(msg);
-          } catch (err) {
-            console.error('[WebRTC Receiver] Erreur message signalement:', err);
-          }
-        };
-
-        ws.onclose = () => {
-          statusDot.className = 'status-dot disconnected';
-          statusText.textContent = 'Déconnecté. Nouvelle tentative...';
-          waitingScreen.classList.remove('hidden');
-          setTimeout(connectSignaling, 2000);
-        };
-
-        ws.onerror = (err) => {
-          console.warn('[WebRTC Receiver] Erreur WebSocket:', err);
-        };
-      } catch (e) {
-        setTimeout(connectSignaling, 3000);
-      }
+      statusText.textContent = 'Connexion au serveur…';
+      ws = new WebSocket(`${protocol}//${window.location.host}/webrtc-signaling`);
+      ws.onopen = () => {
+        statusText.textContent = 'En attente de l’émetteur…';
+        ws.send(JSON.stringify({ type: 'register', role: 'viewer', viewerId }));
+      };
+      ws.onmessage = async event => {
+        try { await handleSignalingMessage(JSON.parse(event.data)); }
+        catch (error) { console.error('[WebRTC Receiver]', error); }
+      };
+      ws.onclose = () => {
+        statusDot.className = 'status-dot disconnected';
+        statusText.textContent = 'Déconnecté. Nouvelle tentative…';
+        waitingScreen.classList.remove('hidden');
+        setTimeout(connectSignaling, 2000);
+      };
+      ws.onerror = () => {};
     }
 
-    async function handleSignalingMessage(msg) {
-      if (msg.type === 'offer') {
-        console.log('[WebRTC Receiver] Offre WebRTC reçue de l\'émetteur');
-        await handleOffer(msg);
-      } else if (msg.type === 'ice-candidate') {
-        if (pc && msg.candidate) {
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
-          } catch (e) {
-            console.warn('[WebRTC Receiver] Erreur ICE candidate:', e);
-          }
-        }
-      } else if (msg.type === 'broadcaster-ready') {
-        console.log('[WebRTC Receiver] Émetteur prêt');
-        statusText.textContent = 'Émetteur détecté. Négociation flux...';
-      } else if (msg.type === 'new-visitor-alert') {
-        triggerVisitorFlash();
-      } else if (msg.type === 'broadcaster-disconnected') {
+    async function handleSignalingMessage(message) {
+      if (message.type === 'offer') await handleOffer(message);
+      else if (message.type === 'ice-candidate' && pc && message.candidate) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(message.candidate)); } catch (error) {}
+      } else if (message.type === 'broadcaster-ready') {
+        statusText.textContent = 'Émetteur détecté. Négociation…';
+      } else if (message.type === 'broadcaster-disconnected') {
         statusDot.className = 'status-dot disconnected';
         statusText.textContent = 'Émetteur déconnecté';
         waitingScreen.classList.remove('hidden');
       }
     }
 
-    async function handleOffer(msg) {
-      if (pc) {
-        try { pc.close(); } catch (e) {}
-      }
-
+    async function handleOffer(message) {
+      if (pc) { try { pc.close(); } catch (error) {} }
       pc = new RTCPeerConnection({ iceServers });
-
-      pc.ontrack = (event) => {
-        console.log('[WebRTC Receiver] 🎬 Piste vidéo reçue !');
-        if (event.streams && event.streams[0]) {
-          videoEl.srcObject = event.streams[0];
-        } else {
-          const inboundStream = new MediaStream();
-          inboundStream.addTrack(event.track);
-          videoEl.srcObject = inboundStream;
+      pc.ontrack = event => {
+        if (event.streams?.[0]) videoEl.srcObject = event.streams[0];
+        else {
+          const stream = new MediaStream();
+          stream.addTrack(event.track);
+          videoEl.srcObject = stream;
         }
-
         videoEl.play().catch(() => {});
         waitingScreen.classList.add('hidden');
         statusDot.className = 'status-dot connected';
-        statusText.textContent = 'FLUX WEBRTC ACTIF (Plein Écran)';
+        statusText.textContent = 'FLUX WEBRTC ACTIF';
         showHUDTemporarily();
       };
-
-      pc.ondatachannel = (event) => {
-        const dc = event.channel;
-        dc.onmessage = (e) => {
-          try {
-            const data = JSON.parse(e.data);
-            if (data.type === 'new-visitor') {
-              triggerVisitorFlash();
-            }
-          } catch (err) {}
-        };
-      };
-
-      pc.onicecandidate = (event) => {
-        if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({
-            type: 'ice-candidate',
-            role: 'viewer',
-            viewerId,
-            candidate: event.candidate
-          }));
+      pc.onicecandidate = event => {
+        if (event.candidate && ws?.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'ice-candidate', role: 'viewer', viewerId, candidate: event.candidate }));
         }
       };
-
       pc.onconnectionstatechange = () => {
-        console.log('[WebRTC Receiver] État connexion:', pc.connectionState);
         if (pc.connectionState === 'connected') {
           statusDot.className = 'status-dot connected';
           statusText.textContent = 'FLUX WEBRTC DIRECT // CONNECTÉ';
           waitingScreen.classList.add('hidden');
-          showHUDTemporarily();
-        } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+        } else if (['disconnected', 'failed'].includes(pc.connectionState)) {
           statusDot.className = 'status-dot disconnected';
-          statusText.textContent = 'Flux interrompu. En attente...';
+          statusText.textContent = 'Flux interrompu. En attente…';
           waitingScreen.classList.remove('hidden');
         }
       };
 
-      await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+      await pc.setRemoteDescription(new RTCSessionDescription(message.sdp));
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'answer',
-          viewerId,
-          sdp: pc.localDescription
-        }));
-      }
+      ws.send(JSON.stringify({ type: 'answer', viewerId, sdp: pc.localDescription }));
     }
 
-    function triggerVisitorFlash() {
-      flashEl.classList.remove('active');
-      void flashEl.offsetWidth;
-      flashEl.classList.add('active');
-      statusText.textContent = 'NOUVEAU VISITEUR DÉTECTÉ 👤';
-      showHUDTemporarily();
-      setTimeout(() => {
-        if (pc && pc.connectionState === 'connected') {
-          statusText.textContent = 'FLUX WEBRTC DIRECT // CONNECTÉ';
-        }
-      }, 2500);
-    }
-
-    // Start signaling connection
     connectSignaling();
   </script>
 </body>

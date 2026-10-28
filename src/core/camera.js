@@ -9,7 +9,6 @@ export class CameraManager {
     this.stream = null;
     this.currentDeviceId = null;
     this.targetResolution = { width: 1280, height: 720 };
-    this.isMirrored = true;
     this.onFrameCallback = null;
     this.isStreaming = false;
   }
@@ -111,10 +110,6 @@ export class CameraManager {
     }
     this.video.srcObject = null;
     this.isStreaming = false;
-  }
-
-  setMirrored(mirrored) {
-    this.isMirrored = mirrored;
   }
 
   getVideoDimensions() {

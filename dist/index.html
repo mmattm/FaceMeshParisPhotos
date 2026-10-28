@@ -7,17 +7,53 @@
   <title>SoftPhotography - Photobooth</title>
   <meta name="description"
     content="Studio-grade Anatomical Lip-Sync & Neural Voice Synthesis with real-time head retargeting">
-  <script type="module" crossorigin src="/assets/main-BqKUFUEZ.js"></script>
+  <script type="module" crossorigin src="/assets/main-ChGY4oqk.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/modulepreload-polyfill-B5Qt9EMX.js">
-  <link rel="stylesheet" crossorigin href="/assets/main-BYcLJpN7.css">
+  <link rel="stylesheet" crossorigin href="/assets/main-BLqI_aBP.css">
 </head>
 
-<body class="mirrored show-webcam show-texture">
+<body class="show-webcam show-texture">
   <div id="app">
     <!-- Loading Overlay -->
     <div id="loading-overlay" class="loading-overlay">
       <div class="loading-spinner"></div>
       <div id="loading-text" class="loading-text">Loading FaceMesh AI model...</div>
+    </div>
+
+    <!-- ComfyUI Settings Modal -->
+    <div id="comfy-settings-modal" class="upload-modal hidden">
+      <div class="upload-modal-backdrop" id="backdrop-comfy-settings"></div>
+      <div class="upload-modal-content comfy-settings-card">
+        <div class="modal-header">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 16px;">⚙</span>
+            <span style="font-weight: 700; font-size: 13px; font-family: var(--font-mono);">COMFYUI</span>
+          </div>
+          <button id="btn-close-comfy-settings" class="tool-btn" type="button">✕</button>
+        </div>
+        <div class="comfy-settings-grid">
+          <label class="toggle-switch-label">
+            <input type="checkbox" id="comfy-enabled">
+            <span class="toggle-slider"></span>
+            <span>Exécuter au nouveau visiteur</span>
+          </label>
+          <label class="comfy-field-label" for="comfy-base-url">Adresse IP / URL de ComfyUI</label>
+          <input id="comfy-base-url" class="comfy-field" type="text"
+            placeholder="http://192.168.1.50:8188" autocomplete="off" spellcheck="false">
+          <label class="comfy-field-label" for="comfy-workflow-select">Workflow API</label>
+          <select id="comfy-workflow-select" class="comfy-field">
+            <option value="">Recherche dans comfyWorkflow/…</option>
+          </select>
+          <div id="comfy-settings-status" class="comfy-settings-status" role="status" aria-live="polite">
+            Placez un workflow JSON au format API dans comfyWorkflow/.
+          </div>
+        </div>
+        <div class="upload-modal-footer comfy-settings-actions">
+          <button id="btn-test-comfy" class="tool-btn" type="button">Tester la connexion</button>
+          <button id="btn-run-comfy" class="tool-btn" type="button" disabled>▶ Exécuter maintenant</button>
+          <button id="btn-save-comfy-settings" class="tool-btn active" type="button">Enregistrer</button>
+        </div>
+      </div>
     </div>
 
     <!-- Calibration Toast -->
@@ -26,25 +62,7 @@
       <span id="cal-text">Calibrating neutral face... Hold still</span>
     </div>
 
-    <!-- Video Upload Processing Modal -->
-    <div id="upload-modal" class="upload-modal hidden">
-      <div class="upload-modal-backdrop"></div>
-      <div class="upload-modal-content">
-        <div class="upload-modal-header">
-          <div class="loading-spinner" style="width: 20px; height: 20px; border-width: 2px;"></div>
-          <span style="font-weight: 600; font-size: 13px;">Extraction de la performance vidéo</span>
-        </div>
-        <p id="upload-status-text" class="upload-status">Analyse de la vidéo et décodage audio...</p>
-        <div class="upload-progress-track">
-          <div id="upload-progress-fill" class="upload-progress-fill" style="width: 0%;"></div>
-        </div>
-        <div class="upload-modal-footer">
-          <span id="upload-progress-detail"
-            style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);">0%</span>
-          <button id="btn-cancel-upload" class="tool-btn" style="padding: 4px 10px; font-size: 11px;">Annuler</button>
-        </div>
-      </div>
-    </div>
+    <div id="app-notifications" class="app-notifications" role="status" aria-live="polite" aria-atomic="false"></div>
 
     <!-- Animations Library Modal -->
     <div id="anim-library-modal" class="upload-modal hidden">
@@ -84,11 +102,14 @@
           <!-- Populated dynamically via JS -->
         </div>
 
-        <div class="upload-modal-footer" style="padding-top: 10px; border-top: 1px solid var(--border-light);">
-          <button id="btn-save-current-loop-modal" class="tool-btn" disabled
-            style="padding: 6px 12px; font-weight: 600;">
-            💾 Sauvegarder la boucle actuelle
-          </button>
+        <div class="upload-modal-footer" style="padding-top: 10px; border-top: 1px solid var(--border-light); display: flex; justify-content: space-between; align-items: center;">
+          <div style="display: flex; gap: 8px;">
+            <button id="btn-import-anim-file" class="tool-btn"
+              style="padding: 6px 12px; font-weight: 600;" title="Importer un fichier d'animation .json">
+              📥 Importer (.json)
+            </button>
+            <input type="file" id="input-import-anim" accept=".json" style="display: none;">
+          </div>
           <button id="btn-close-anim-modal-2" class="tool-btn active" style="padding: 6px 14px; font-weight: 600;">
             Fermer
           </button>
@@ -96,38 +117,37 @@
       </div>
     </div>
 
-    <!-- Save Animation Prompt Modal -->
-    <div id="save-anim-modal" class="upload-modal hidden">
-      <div class="upload-modal-backdrop" id="backdrop-save-anim"></div>
-      <div class="upload-modal-content" style="width: 440px;">
+    <div id="audio-library-modal" class="upload-modal hidden" role="dialog" aria-modal="true" aria-labelledby="audio-library-title">
+      <div class="upload-modal-backdrop" id="backdrop-audio-library"></div>
+      <div class="upload-modal-content anim-library-card audio-library-card">
         <div class="modal-header">
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="font-size: 16px;">💾</span>
-            <span
-              style="font-weight: 700; font-size: 13px; font-family: var(--font-mono); letter-spacing: 0.5px;">SAUVEGARDER
-              L'ANIMATION</span>
-          </div>
-          <button id="btn-close-save-modal" class="tool-btn" style="padding: 4px 8px; font-size: 11px;">✕</button>
+          <strong id="audio-library-title">♫ BIBLIOTHÈQUE AUDIO</strong>
+          <button id="btn-close-audio-library" class="tool-btn" type="button" aria-label="Fermer la bibliothèque audio">✕</button>
         </div>
-
-        <div style="display: flex; flex-direction: column; gap: 10px; padding: 10px 0;">
-          <label style="font-size: 12px; color: var(--text-muted); font-family: var(--font-mono);">
-            Nom de la performance faciale :
-          </label>
-          <input type="text" id="save-anim-name-input"
-            placeholder="Ex: Clin d'œil malicieux, Rire complice, Surprise..."
-            style="width: 100%; box-sizing: border-box; padding: 9px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border-light); background: var(--bg-surface-elevated); color: var(--text-main); font-size: 13px; outline: none;">
-          <div style="font-size: 11px; color: var(--text-muted); line-height: 1.4;">
-            📁 L'animation sera enregistrée dans <strong style="color: #f59e0b;">public/animations/</strong> et sera
-            jouée aléatoirement (50% du temps) lorsque le masque est en mode autonome.
+        <div class="anim-lib-banner">
+          <p class="anim-lib-desc">Choisissez une piste pour les presets ou alternez toute la bibliothèque. Le bouton Écouter permet une préécoute.</p>
+          <div class="audio-library-options">
+            <button id="btn-audio-library-all" class="tool-btn" type="button">Alterner toutes les pistes</button>
+            <button id="btn-audio-library-toggle" class="tool-btn" type="button">Activer l’audio</button>
+          </div>
+          <div class="audio-delay-control">
+            <label for="audio-delay-ms">Délai du son après les lèvres</label>
+            <div class="audio-delay-row">
+              <input id="audio-delay-ms" class="blend-slider" type="range" min="0" max="2000" step="10" value="0">
+              <output id="audio-delay-value" for="audio-delay-ms">0 ms</output>
+              <button id="btn-reset-audio-delay" class="tool-btn" type="button" aria-label="Remettre le délai audio à zéro" title="Remettre à 0 ms">↺</button>
+            </div>
+            <p>0 = synchronisé. Augmenter retarde le son par rapport au lipsync, y compris sur le second écran.</p>
           </div>
         </div>
-
-        <div class="upload-modal-footer"
-          style="padding-top: 10px; border-top: 1px solid var(--border-light); justify-content: flex-end; gap: 8px;">
-          <button id="btn-cancel-save-anim" class="tool-btn" style="padding: 6px 12px;">Annuler</button>
-          <button id="btn-confirm-save-anim" class="tool-btn active"
-            style="padding: 6px 16px; font-weight: 600;">Enregistrer</button>
+        <div class="anim-list-header"><span>Bibliothèque audio</span><span id="audio-library-count">0 piste</span></div>
+        <div id="audio-library-status" class="audio-library-status" role="status" aria-live="polite"></div>
+        <div id="audio-library-list" class="anim-list-container"></div>
+        <audio id="audio-library-preview" class="audio-library-preview hidden" controls preload="none" aria-label="Préécoute audio"></audio>
+        <div class="upload-modal-footer audio-library-footer">
+          <button id="btn-import-audio" class="tool-btn" type="button">📥 Importer un audio</button>
+          <input id="input-import-audio" type="file" accept=".mp3,.wav,.ogg,.m4a,.aac,.flac,.webm,.opus,audio/*" multiple hidden>
+          <button id="btn-close-audio-library-bottom" class="tool-btn active" type="button">Fermer</button>
         </div>
       </div>
     </div>
@@ -141,38 +161,44 @@
           <span>STATE:</span>
           <strong id="app-state-label">LIVE</strong>
         </div>
-        <div class="mono-stat webrtc-stat" id="webrtc-status-badge">
-          <span class="state-indicator-dot" id="webrtc-dot"></span>
-          <span id="webrtc-status-text">WebRTC: En attente</span>
-        </div>
+        <button id="btn-copy-visitor-id" class="mono-stat visitor-status" type="button" disabled
+          title="Aucun visiteur identifié" aria-label="Aucun visiteur identifié">
+          <span>Visiteur :</span>
+          <strong id="current-visitor-id" role="status" aria-live="polite">En attente</strong>
+        </button>
+        <button id="btn-open-anim-library" class="mono-stat animation-status" type="button"
+          title="Ouvrir la bibliothèque d'animations" aria-haspopup="dialog" aria-controls="anim-library-modal">
+          <span>Animation :</span>
+          <strong id="active-animation-label" role="status" aria-live="polite">En attente</strong>
+          <span aria-hidden="true">▾</span>
+        </button>
+        <button id="audio-playback-status" class="mono-stat audio-status" type="button"
+          title="Ouvrir la bibliothèque audio" aria-haspopup="dialog" aria-controls="audio-library-modal">
+          <span>Audio :</span>
+          <strong id="active-audio-label" role="status" aria-live="polite">Désactivé</strong>
+          <span aria-hidden="true">▾</span>
+        </button>
       </div>
 
     </header>
+
+    <aside class="webrtc-preview-card" aria-label="Aperçu de la sortie vidéo WebRTC">
+      <div class="webrtc-preview-header">
+        <span><span class="webrtc-preview-live-dot"></span> WEBRTC OUT</span>
+        <span id="webrtc-preview-meta">1080×1080 · 30 FPS</span>
+      </div>
+      <div id="webrtc-preview-slot" class="webrtc-preview-slot"></div>
+      <div class="webrtc-preview-status webrtc-stat" id="webrtc-status-badge">
+        <span class="state-indicator-dot" id="webrtc-dot"></span>
+        <span id="webrtc-status-text">WebRTC: En attente</span>
+      </div>
+    </aside>
 
     <!-- Main Stage -->
     <main class="stage-container" id="stage-container">
       <div class="video-wrapper">
         <video id="webcam-video" autoplay playsinline muted></video>
         <canvas id="output-canvas"></canvas>
-      </div>
-
-      <!-- Shutter Flash Effect Overlay -->
-      <div id="camera-flash" class="camera-flash"></div>
-
-      <!-- Floating Snapshot Notification Toast -->
-      <div id="snapshot-toast" class="snapshot-toast hidden">
-        <div class="snapshot-toast-preview">
-          <img id="snapshot-toast-img" src="" alt="Capture webcam">
-        </div>
-        <div class="snapshot-toast-info">
-          <div class="snapshot-toast-badge">📸 NOUVEAU VISITEUR</div>
-          <div class="snapshot-toast-time" id="snapshot-toast-time">--:--:--</div>
-          <div class="snapshot-toast-actions">
-            <button id="btn-download-toast-snapshot" class="snapshot-toast-btn primary" title="Télécharger la photo">⬇
-              Sauvegarder</button>
-            <button id="btn-close-toast-snapshot" class="snapshot-toast-btn" title="Fermer">✕</button>
-          </div>
-        </div>
       </div>
 
       <!-- Interactive 3D Camera Alignment Overlay & Guide Crosshair -->
@@ -281,101 +307,108 @@
             ↺ Tout réinitialiser
           </button>
         </div>
+        <div class="align-save-row">
+          <span id="align-save-status" role="status" aria-live="polite">Aucun réglage enregistré</span>
+          <button id="btn-save-cam" class="tool-btn" type="button"
+            title="Mémoriser la position, les angles et le zoom sur ce navigateur">💾 Save</button>
+        </div>
       </div>
     </div>
 
+    <section id="facemesh-position-panel" class="align-panel facemesh-position-panel hidden" aria-labelledby="facemesh-position-title">
+      <div class="align-panel-header">
+        <span id="facemesh-position-title" class="align-title">FaceMesh</span>
+        <button id="btn-close-facemesh-position" class="tool-btn align-close-btn" type="button" aria-label="Fermer les réglages FaceMesh">✕</button>
+      </div>
+      <div class="align-panel-body">
+        <p id="facemesh-position-context" class="facemesh-position-hint" role="status" aria-live="polite">Mode normal · alignement sur la caméra</p>
+        <p class="facemesh-position-hint">Déplacements en % de l’écart entre les yeux. Chaque mode conserve son propre réglage.</p>
+        <div class="facemesh-position-row">
+          <label for="facemesh-x">Gauche / droite</label>
+          <input id="facemesh-x" data-face-slider="x" class="blend-slider" type="range" min="-50" max="50" step="0.5" value="0">
+          <input data-face-number="x" type="number" aria-label="Position horizontale (%)" min="-50" max="50" step="0.5" value="0">
+        </div>
+        <div class="facemesh-position-row">
+          <label for="facemesh-y">Hauteur ↑</label>
+          <input id="facemesh-y" data-face-slider="y" class="blend-slider" type="range" min="-50" max="50" step="0.5" value="0">
+          <input data-face-number="y" type="number" aria-label="Hauteur (%)" min="-50" max="50" step="0.5" value="0">
+        </div>
+        <div class="facemesh-position-row">
+          <label for="facemesh-z">Vers l’avant</label>
+          <input id="facemesh-z" data-face-slider="z" class="blend-slider" type="range" min="-100" max="100" step="0.5" value="0">
+          <input data-face-number="z" type="number" aria-label="Profondeur (%)" min="-100" max="100" step="0.5" value="0">
+        </div>
+        <div class="facemesh-position-row">
+          <label for="facemesh-scale">Taille (%)</label>
+          <input id="facemesh-scale" data-face-slider="scale" class="blend-slider" type="range" min="50" max="150" step="0.5" value="100">
+          <input data-face-number="scale" type="number" aria-label="Taille (%)" min="50" max="150" step="0.5" value="100">
+        </div>
+        <span class="align-section-title">Inclinaison (°)</span>
+        <div class="facemesh-position-row">
+          <label for="facemesh-pitch">Haut / bas</label>
+          <input id="facemesh-pitch" data-face-slider="pitch" class="blend-slider" type="range" min="-45" max="45" step="0.5" value="0">
+          <input data-face-number="pitch" type="number" aria-label="Inclinaison haut / bas (°)" min="-45" max="45" step="0.5" value="0">
+        </div>
+        <div class="facemesh-position-row">
+          <label for="facemesh-yaw">Gauche / droite</label>
+          <input id="facemesh-yaw" data-face-slider="yaw" class="blend-slider" type="range" min="-45" max="45" step="0.5" value="0">
+          <input data-face-number="yaw" type="number" aria-label="Inclinaison gauche / droite (°)" min="-45" max="45" step="0.5" value="0">
+        </div>
+        <div class="facemesh-position-row">
+          <label for="facemesh-roll">Roulis</label>
+          <input id="facemesh-roll" data-face-slider="roll" class="blend-slider" type="range" min="-30" max="30" step="0.5" value="0">
+          <input data-face-number="roll" type="number" aria-label="Roulis (°)" min="-30" max="30" step="0.5" value="0">
+        </div>
+        <label class="align-checkbox-label">
+          <input id="check-facemesh-visible" type="checkbox" checked>
+          <span>Afficher le FaceMesh</span>
+        </label>
+        <div class="facemesh-position-actions">
+          <button id="btn-reset-facemesh-position" class="tool-btn" type="button">Réinitialiser</button>
+          <button id="btn-save-facemesh-position" class="tool-btn" type="button"
+            title="Mémoriser la position, les inclinaisons et la taille du FaceMesh sur ce navigateur">💾 Save</button>
+        </div>
+        <p id="facemesh-position-status" class="facemesh-position-hint" role="status" aria-live="polite">Cliquez sur Save pour mémoriser</p>
+      </div>
+    </section>
+
     <!-- Center Bottom Panel -->
     <footer class="bottom-panel">
-      <!-- Pure Expression Looper Deck -->
+      <!-- Motion-only preset recorder -->
       <div class="looper-card">
-        <div class="looper-main-row" id="row-webcam-record">
-          <div style="display: flex; gap: 8px; align-items: center;">
-            <button id="btn-record-clip" class="btn-record-clip" title="Enregistrer l'expression (ou barre Espace)">
-              <span class="rec-indicator"></span>
-              <span id="rec-label">Record Expression</span>
-            </button>
-
-            <!-- Video Upload Performance Button -->
-            <button id="btn-upload-video" class="tool-btn" style="padding: 6px 12px; font-weight: 600;"
-              title="Importer une vidéo pour extraire la performance faciale et le son">
-              <span>📁 Upload Vidéo</span>
-            </button>
-            <input type="file" id="video-file-input" accept="video/*,.mp4,.webm,.mov,.m4v,.mkv" style="display: none;">
-
-            <button id="btn-toggle-loop" class="btn-loop-toggle" disabled
-              title="Lire / Mettre en pause la boucle sur la tête live">
-              <span id="loop-btn-icon">▶</span>
-              <span id="loop-label">Play Loop</span>
-            </button>
-
-            <button id="btn-clear-loop" class="tool-btn" style="padding: 6px 10px;" disabled
-              title="Effacer l'expression enregistrée">
-              ✕ Clear
-            </button>
-
-            <!-- Save Animation Button -->
-            <button id="btn-save-anim" class="tool-btn" style="padding: 6px 11px; font-weight: 600;" disabled
-              title="Sauvegarder l'animation dans le dossier dédié (public/animations/)">
-              <span>💾 Sauvegarder</span>
-            </button>
-
-            <!-- Audio Mute Toggle Button -->
-            <button id="btn-toggle-audio" class="tool-btn active" style="padding: 6px 10px;"
-              title="Activer / Couper le son de la boucle (Mute)">
-              <span id="audio-btn-icon">🔊</span>
-              <span id="audio-btn-label">Audio</span>
-            </button>
-          </div>
-
-          <div style="display: flex; gap: 14px; align-items: center; flex-wrap: wrap;">
-
-            <!-- Expression Boost / Exaggeration Slider (0% = Normal 1x, 100% = 2x plus expressif) -->
-            <div class="blend-control"
-              title="0% = Normal (1x) | 100% = 2x plus expressif (amplifie les mouvements par rapport au repos)">
-              <span>Exagération:</span>
-              <input type="range" id="slider-boost" class="blend-slider" min="0" max="100" value="50"
-                style="width: 65px;">
-              <span id="boost-val-label" style="min-width: 26px;">50%</span>
-            </div>
-
-            <!-- Animation Audio Delay / Offset Slider (0.0s to 4.0s, default: 2.2s) -->
-            <div class="blend-control"
-              title="Décalage / délai de l'audio lors des animations (0.0s à 4.0s, défaut: 2.2s)">
-              <span>Audio Delay:</span>
-              <input type="range" id="slider-anim-audio-delay" class="blend-slider" min="0" max="4" step="0.1" value="2.2"
-                style="width: 65px;">
-              <span id="anim-audio-delay-val-label" style="min-width: 28px;">2.2s</span>
-            </div>
-
-            <!-- Audio Volume Slider -->
-            <div class="blend-control" id="vol-control" title="Volume du son enregistré (0% à 100%)">
-              <span>Vol:</span>
-              <input type="range" id="slider-volume" class="blend-slider" min="0" max="100" value="100"
-                style="width: 50px;">
-              <span id="volume-val-label" style="min-width: 26px;">100%</span>
-            </div>
-          </div>
+        <div class="motion-preset-recorder" aria-label="Enregistrement d'un preset de mouvement sans audio">
+          <input id="motion-preset-name" class="motion-preset-name" type="text" maxlength="80"
+            placeholder="Nom du preset (optionnel)" aria-label="Nom du nouveau preset">
+          <button id="btn-record-motion-preset" class="tool-btn motion-preset-button" type="button"
+            aria-pressed="false" title="Enregistrer uniquement les mouvements du visage et de la tête, sans audio">
+            <span>● Enregistrer un preset</span>
+          </button>
+          <span id="motion-preset-status" class="motion-preset-status" role="status" aria-live="polite">
+            Commencez visage neutre · sans audio
+          </span>
         </div>
-
-        <!-- Timeline Track -->
-        <div class="timeline-container">
-          <span id="time-current">0.0s</span>
-          <div class="timeline-track" id="timeline-track" style="cursor: pointer;">
-            <div id="timeline-progress" class="timeline-progress"></div>
+        <div class="simple-settings-row">
+          <label class="blend-control" for="slider-expression-intensity" title="Intensité des sourcils, du regard et du sourire pendant les presets">
+            <span>Expressions</span>
+            <input type="range" id="slider-expression-intensity" class="blend-slider" min="50" max="220" step="10" value="160" style="width: 85px;">
+            <span id="expression-intensity-value">160%</span>
+          </label>
+          <div class="blend-control"
+            title="Sensibilité de détection d'un nouveau visiteur (10% à 100%, défaut: 50%)">
+            <span>Sensibilité Visiteur:</span>
+            <input type="range" id="slider-visitor-sensitivity" class="blend-slider" min="10" max="100" value="50"
+              style="width: 65px;">
+            <span id="visitor-sensitivity-val-label" style="min-width: 28px;">50%</span>
           </div>
-          <span id="time-total">0.0s</span>
+          <button id="btn-debug-new-visitor" class="tool-btn debug-visitor-btn" type="button"
+            title="Simuler un nouveau visiteur : nouvelle capture FaceMesh et appel ComfyUI après 1 seconde si activé">
+            ↻ Test visiteur
+          </button>
         </div>
       </div>
 
-      <!-- Sub-controls: Mirror, Align 3D, Autonome -->
+      <!-- Sub-controls: Align 3D, Autonome, Buste, ComfyUI -->
       <div class="sub-controls">
-        <!-- Mirror Toggle (Default: ON) -->
-        <button id="btn-toggle-mirror" class="tool-btn active" title="Toggle horizontal mirror (M)">
-          <span>🪞 Mirror</span>
-        </button>
-
-        <div class="divider-vert"></div>
-
         <!-- 3D Camera Alignment / Offset Mode Toggle -->
         <button id="btn-toggle-align" class="tool-btn" title="Mode alignement 3D : déplacer et orienter la caméra (O)">
           <span>📐 Align 3D</span>
@@ -384,9 +417,36 @@
         <div class="divider-vert"></div>
 
         <!-- Autonomous Mode Toggle -->
-        <button id="btn-toggle-autonomous" class="tool-btn"
+        <button id="btn-toggle-autonomous" class="tool-btn" disabled
           title="Activer / Forcer le mode autonome avec regard doux et saccades (A)">
           <span>🤖 Autonome</span>
+        </button>
+
+        <div class="divider-vert"></div>
+
+        <button id="btn-toggle-bust" class="tool-btn" type="button" aria-pressed="false"
+          title="Afficher la tête, le cou et les épaules en 3D derrière le masque photo">
+          <span>🗿 Buste 3D</span>
+        </button>
+
+        <button id="btn-toggle-minimalist" class="tool-btn" type="button" aria-pressed="false"
+          title="Points blancs du FaceMesh sur fond noir, sans image caméra ni buste, également en WebRTC">
+          <span>⚪ Minimaliste</span>
+        </button>
+
+        <button id="btn-facemesh-position" class="tool-btn" type="button" aria-expanded="false" aria-controls="facemesh-position-panel">
+          <span>↔ FaceMesh</span>
+        </button>
+
+        <div class="divider-vert"></div>
+
+        <button id="btn-open-comfy-settings" class="tool-btn" type="button"
+          title="Configurer l'adresse ComfyUI et le workflow">
+          <span id="comfy-button-label">⚙ ComfyUI</span>
+        </button>
+        <button id="btn-preset-audio" class="tool-btn" type="button" aria-pressed="false" disabled
+          title="Jouer les pistes de la bibliothèque avec les presets et synchroniser les mouvements de bouche">
+          🔇 Audio
         </button>
       </div>
     </footer>

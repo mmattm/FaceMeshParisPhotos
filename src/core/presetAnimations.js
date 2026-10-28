@@ -7,6 +7,7 @@
  * 2. Étonnement & curiosité (Inquisitive surprise, brow lift, tilt back)
  * 3. Hochement complice (Affirmative head nod, subtle roll, warm smile)
  * 4. Regard pensif & sourire (Pensive glance, curiosity pulse, blooming smile)
+ * 5. Sourcils froncés (Concentration, asymmetric brow furrow and narrowed eyes)
  */
 
 export function generatePresetAnimations() {
@@ -50,7 +51,7 @@ export function generatePresetAnimations() {
       pitch = -2.0 + wink * 1.5;
       eyeBlinkL = Math.min(1.0, wink * 1.15);
       mouthSmile = 0.35 + 0.45 * Math.sin(p * Math.PI * 0.5);
-      browUp = 0.30 * wink;
+      browUp = 0.45 * wink;
       jawOpen = 0.08 * wink;
     } else if (progress < 0.75) {
       // Phase 3: Affirmative micro-nod, warm suppressed giggle / amusement
@@ -263,7 +264,7 @@ export function generatePresetAnimations() {
       x = -0.06 * ease;
       eyeLookUp = 0.45 * ease;
       eyeLookSide = -0.50 * ease;
-      browDown = 0.25 * ease;
+      browDown = 0.55 * ease;
     } else if (progress < 0.70) {
       // Revelation: looks back at camera, eyes widen, radiant smile
       const p = (progress - 0.35) / 0.35;
@@ -274,7 +275,7 @@ export function generatePresetAnimations() {
       x = -0.06 * (1 - ease) + 0.02 * ease;
       eyeLookUp = 0.45 * (1 - ease);
       eyeLookSide = -0.50 * (1 - ease);
-      browDown = 0.25 * (1 - ease);
+      browDown = 0.55 * (1 - ease);
       browInnerUp = 0.65 * ease;
       mouthSmile = 0.85 * ease;
     } else {
@@ -313,5 +314,39 @@ export function generatePresetAnimations() {
     });
   }
 
-  return [anim1, anim2, anim3, anim4];
+  // 5. Clearly readable concentration, with a neutral mouth and a smooth release.
+  const anim5 = {
+    id: 'preset_sourcils_fronces',
+    name: 'Sourcils froncés',
+    durationMs: 3200,
+    frameCount: 96,
+    fps,
+    createdAt: new Date().toISOString(),
+    hasAudio: false,
+    frames: []
+  };
+  const ease = t => t * t * (3 - 2 * t);
+  for (let f = 0; f < anim5.frameCount; f++) {
+    const progress = f / (anim5.frameCount - 1);
+    const strength = progress < 0.28 ? ease(progress / 0.28)
+      : progress < 0.68 ? 1 : 1 - ease((progress - 0.68) / 0.32);
+    anim5.frames.push({
+      timeOffsetMs: Math.round(f / fps * 1000),
+      headPose: {
+        pitch: Number((4 * strength).toFixed(2)),
+        yaw: Number((Math.sin(progress * Math.PI * 2) * 5 * strength).toFixed(2)),
+        roll: Number((-2 * strength).toFixed(2)),
+        x: 0, y: 0, z: 0
+      },
+      blendshapes: {
+        browDownLeft: Number((0.88 * strength).toFixed(3)),
+        browDownRight: Number((0.76 * strength).toFixed(3)),
+        eyeSquintLeft: Number((0.45 * strength).toFixed(3)),
+        eyeSquintRight: Number((0.40 * strength).toFixed(3)),
+        mouthSmileLeft: 0, mouthSmileRight: 0, jawOpen: 0
+      }
+    });
+  }
+
+  return [anim1, anim2, anim3, anim4, anim5];
 }

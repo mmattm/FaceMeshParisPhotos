@@ -1,0 +1,73 @@
+{
+  "version": "1.0.0",
+  "title": "Soft Photography Photomaton - Animation Library Catalog",
+  "updatedAt": "2026-10-27",
+  "totalAnimations": 5,
+  "animations": [
+    {
+      "id": "preset_clin_doeil_sourire",
+      "name": "Clin d'œil & Sourire",
+      "filename": "preset_clin_doeil_sourire.json",
+      "durationMs": 2800,
+      "durationSec": 2.8,
+      "frameCount": 84,
+      "hasAudio": false,
+      "sizeBytes": 33336,
+      "sizeFormatted": "0.03 MB",
+      "createdAt": "2026-10-25T12:27:32.142Z",
+      "downloadPath": "/animations/preset_clin_doeil_sourire.json"
+    },
+    {
+      "id": "preset_etonnement_curieux",
+      "name": "Étonnement & Curiosité",
+      "filename": "preset_etonnement_curieux.json",
+      "durationMs": 3000,
+      "durationSec": 3,
+      "frameCount": 90,
+      "hasAudio": false,
+      "sizeBytes": 42160,
+      "sizeFormatted": "0.04 MB",
+      "createdAt": "2026-10-25T12:27:32.143Z",
+      "downloadPath": "/animations/preset_etonnement_curieux.json"
+    },
+    {
+      "id": "preset_hochement_complice",
+      "name": "Hochement Complice",
+      "filename": "preset_hochement_complice.json",
+      "durationMs": 2600,
+      "durationSec": 2.6,
+      "frameCount": 78,
+      "hasAudio": false,
+      "sizeBytes": 26781,
+      "sizeFormatted": "0.03 MB",
+      "createdAt": "2026-10-25T12:27:32.144Z",
+      "downloadPath": "/animations/preset_hochement_complice.json"
+    },
+    {
+      "id": "preset_regard_pensif",
+      "name": "Regard Pensif & Éclat",
+      "filename": "preset_regard_pensif.json",
+      "durationMs": 3200,
+      "durationSec": 3.2,
+      "frameCount": 96,
+      "hasAudio": false,
+      "sizeBytes": 47988,
+      "sizeFormatted": "0.05 MB",
+      "createdAt": "2026-10-25T12:27:32.144Z",
+      "downloadPath": "/animations/preset_regard_pensif.json"
+    },
+    {
+      "id": "preset_sourcils_fronces",
+      "name": "Sourcils froncés",
+      "filename": "preset_sourcils_fronces.json",
+      "durationMs": 3200,
+      "durationSec": 3.2,
+      "frameCount": 96,
+      "hasAudio": false,
+      "sizeBytes": 40343,
+      "sizeFormatted": "0.04 MB",
+      "createdAt": "2026-10-27T08:31:11.796Z",
+      "downloadPath": "/animations/preset_sourcils_fronces.json"
+    }
+  ]
+}

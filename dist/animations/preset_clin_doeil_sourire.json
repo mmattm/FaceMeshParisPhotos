@@ -1,0 +1,1608 @@
+{
+  "id": "preset_clin_doeil_sourire",
+  "name": "Clin d'œil & Sourire",
+  "durationMs": 2800,
+  "frameCount": 84,
+  "fps": 30,
+  "createdAt": "2026-10-25T12:27:32.142Z",
+  "hasAudio": false,
+  "frames": [
+    {
+      "timeOffsetMs": 0,
+      "headPose": {
+        "pitch": 0,
+        "yaw": 0,
+        "roll": 0,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0,
+        "mouthSmileRight": 0,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 33,
+      "headPose": {
+        "pitch": -0.01,
+        "yaw": 0.03,
+        "roll": -0.03,
+        "x": 0.0001,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.002,
+        "mouthSmileRight": 0.002,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 67,
+      "headPose": {
+        "pitch": -0.05,
+        "yaw": 0.13,
+        "roll": -0.11,
+        "x": 0.0005,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.009,
+        "mouthSmileRight": 0.008,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 100,
+      "headPose": {
+        "pitch": -0.11,
+        "yaw": 0.28,
+        "roll": -0.25,
+        "x": 0.0011,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.019,
+        "mouthSmileRight": 0.018,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 133,
+      "headPose": {
+        "pitch": -0.19,
+        "yaw": 0.48,
+        "roll": -0.43,
+        "x": 0.0019,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.033,
+        "mouthSmileRight": 0.031,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 167,
+      "headPose": {
+        "pitch": -0.29,
+        "yaw": 0.72,
+        "roll": -0.64,
+        "x": 0.0029,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.05,
+        "mouthSmileRight": 0.046,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 200,
+      "headPose": {
+        "pitch": -0.4,
+        "yaw": 0.99,
+        "roll": -0.89,
+        "x": 0.004,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.069,
+        "mouthSmileRight": 0.064,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 233,
+      "headPose": {
+        "pitch": -0.52,
+        "yaw": 1.3,
+        "roll": -1.17,
+        "x": 0.0052,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.091,
+        "mouthSmileRight": 0.083,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 267,
+      "headPose": {
+        "pitch": -0.65,
+        "yaw": 1.62,
+        "roll": -1.46,
+        "x": 0.0065,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.114,
+        "mouthSmileRight": 0.105,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 300,
+      "headPose": {
+        "pitch": -0.79,
+        "yaw": 1.97,
+        "roll": -1.77,
+        "x": 0.0079,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.138,
+        "mouthSmileRight": 0.127,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 333,
+      "headPose": {
+        "pitch": -0.93,
+        "yaw": 2.32,
+        "roll": -2.09,
+        "x": 0.0093,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.163,
+        "mouthSmileRight": 0.15,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 367,
+      "headPose": {
+        "pitch": -1.07,
+        "yaw": 2.68,
+        "roll": -2.41,
+        "x": 0.0107,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.187,
+        "mouthSmileRight": 0.172,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 400,
+      "headPose": {
+        "pitch": -1.21,
+        "yaw": 3.03,
+        "roll": -2.73,
+        "x": 0.0121,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.212,
+        "mouthSmileRight": 0.195,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 433,
+      "headPose": {
+        "pitch": -1.35,
+        "yaw": 3.38,
+        "roll": -3.04,
+        "x": 0.0135,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.236,
+        "mouthSmileRight": 0.217,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 467,
+      "headPose": {
+        "pitch": -1.48,
+        "yaw": 3.7,
+        "roll": -3.33,
+        "x": 0.0148,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.259,
+        "mouthSmileRight": 0.239,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 500,
+      "headPose": {
+        "pitch": -1.6,
+        "yaw": 4.01,
+        "roll": -3.61,
+        "x": 0.016,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.281,
+        "mouthSmileRight": 0.258,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 533,
+      "headPose": {
+        "pitch": -1.71,
+        "yaw": 4.28,
+        "roll": -3.86,
+        "x": 0.0171,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.3,
+        "mouthSmileRight": 0.276,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 567,
+      "headPose": {
+        "pitch": -1.81,
+        "yaw": 4.52,
+        "roll": -4.07,
+        "x": 0.0181,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.317,
+        "mouthSmileRight": 0.291,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 600,
+      "headPose": {
+        "pitch": -1.89,
+        "yaw": 4.72,
+        "roll": -4.25,
+        "x": 0.0189,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.331,
+        "mouthSmileRight": 0.304,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 633,
+      "headPose": {
+        "pitch": -1.95,
+        "yaw": 4.87,
+        "roll": -4.39,
+        "x": 0.0195,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.341,
+        "mouthSmileRight": 0.314,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 667,
+      "headPose": {
+        "pitch": -1.99,
+        "yaw": 4.97,
+        "roll": -4.47,
+        "x": 0.0199,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.348,
+        "mouthSmileRight": 0.32,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 700,
+      "headPose": {
+        "pitch": -2,
+        "yaw": 5,
+        "roll": -4.5,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.35,
+        "mouthSmileRight": 0.322,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 733,
+      "headPose": {
+        "pitch": -1.78,
+        "yaw": 5.3,
+        "roll": -4.72,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.384,
+        "mouthSmileRight": 0.353,
+        "eyeBlinkLeft": 0.171,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.067,
+        "jawOpen": 0.012
+      }
+    },
+    {
+      "timeOffsetMs": 767,
+      "headPose": {
+        "pitch": -1.56,
+        "yaw": 5.59,
+        "roll": -4.94,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.417,
+        "mouthSmileRight": 0.384,
+        "eyeBlinkLeft": 0.339,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.133,
+        "jawOpen": 0.024
+      }
+    },
+    {
+      "timeOffsetMs": 800,
+      "headPose": {
+        "pitch": -1.35,
+        "yaw": 5.87,
+        "roll": -5.15,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.45,
+        "mouthSmileRight": 0.414,
+        "eyeBlinkLeft": 0.499,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.195,
+        "jawOpen": 0.035
+      }
+    },
+    {
+      "timeOffsetMs": 833,
+      "headPose": {
+        "pitch": -1.16,
+        "yaw": 6.13,
+        "roll": -5.34,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.483,
+        "mouthSmileRight": 0.444,
+        "eyeBlinkLeft": 0.648,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.253,
+        "jawOpen": 0.045
+      }
+    },
+    {
+      "timeOffsetMs": 867,
+      "headPose": {
+        "pitch": -0.98,
+        "yaw": 6.36,
+        "roll": -5.52,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.514,
+        "mouthSmileRight": 0.473,
+        "eyeBlinkLeft": 0.782,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.306,
+        "jawOpen": 0.054
+      }
+    },
+    {
+      "timeOffsetMs": 900,
+      "headPose": {
+        "pitch": -0.83,
+        "yaw": 6.56,
+        "roll": -5.67,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.545,
+        "mouthSmileRight": 0.502,
+        "eyeBlinkLeft": 0.899,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.352,
+        "jawOpen": 0.063
+      }
+    },
+    {
+      "timeOffsetMs": 933,
+      "headPose": {
+        "pitch": -0.7,
+        "yaw": 6.73,
+        "roll": -5.8,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.575,
+        "mouthSmileRight": 0.529,
+        "eyeBlinkLeft": 0.996,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.39,
+        "jawOpen": 0.069
+      }
+    },
+    {
+      "timeOffsetMs": 967,
+      "headPose": {
+        "pitch": -0.6,
+        "yaw": 6.86,
+        "roll": -5.9,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.603,
+        "mouthSmileRight": 0.555,
+        "eyeBlinkLeft": 1,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.419,
+        "jawOpen": 0.074
+      }
+    },
+    {
+      "timeOffsetMs": 1000,
+      "headPose": {
+        "pitch": -0.54,
+        "yaw": 6.95,
+        "roll": -5.96,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.631,
+        "mouthSmileRight": 0.58,
+        "eyeBlinkLeft": 1,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.439,
+        "jawOpen": 0.078
+      }
+    },
+    {
+      "timeOffsetMs": 1033,
+      "headPose": {
+        "pitch": -0.5,
+        "yaw": 6.99,
+        "roll": -6,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.656,
+        "mouthSmileRight": 0.604,
+        "eyeBlinkLeft": 1,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.449,
+        "jawOpen": 0.08
+      }
+    },
+    {
+      "timeOffsetMs": 1067,
+      "headPose": {
+        "pitch": -0.5,
+        "yaw": 6.99,
+        "roll": -6,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.68,
+        "mouthSmileRight": 0.625,
+        "eyeBlinkLeft": 1,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.449,
+        "jawOpen": 0.08
+      }
+    },
+    {
+      "timeOffsetMs": 1100,
+      "headPose": {
+        "pitch": -0.54,
+        "yaw": 6.95,
+        "roll": -5.96,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.702,
+        "mouthSmileRight": 0.646,
+        "eyeBlinkLeft": 1,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.439,
+        "jawOpen": 0.078
+      }
+    },
+    {
+      "timeOffsetMs": 1133,
+      "headPose": {
+        "pitch": -0.6,
+        "yaw": 6.86,
+        "roll": -5.9,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.722,
+        "mouthSmileRight": 0.664,
+        "eyeBlinkLeft": 1,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.419,
+        "jawOpen": 0.074
+      }
+    },
+    {
+      "timeOffsetMs": 1167,
+      "headPose": {
+        "pitch": -0.7,
+        "yaw": 6.73,
+        "roll": -5.8,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.74,
+        "mouthSmileRight": 0.681,
+        "eyeBlinkLeft": 0.996,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.39,
+        "jawOpen": 0.069
+      }
+    },
+    {
+      "timeOffsetMs": 1200,
+      "headPose": {
+        "pitch": -0.83,
+        "yaw": 6.56,
+        "roll": -5.67,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.755,
+        "mouthSmileRight": 0.695,
+        "eyeBlinkLeft": 0.899,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.352,
+        "jawOpen": 0.063
+      }
+    },
+    {
+      "timeOffsetMs": 1233,
+      "headPose": {
+        "pitch": -0.98,
+        "yaw": 6.36,
+        "roll": -5.52,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.769,
+        "mouthSmileRight": 0.707,
+        "eyeBlinkLeft": 0.782,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.306,
+        "jawOpen": 0.054
+      }
+    },
+    {
+      "timeOffsetMs": 1267,
+      "headPose": {
+        "pitch": -1.16,
+        "yaw": 6.13,
+        "roll": -5.34,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.78,
+        "mouthSmileRight": 0.718,
+        "eyeBlinkLeft": 0.648,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.253,
+        "jawOpen": 0.045
+      }
+    },
+    {
+      "timeOffsetMs": 1300,
+      "headPose": {
+        "pitch": -1.35,
+        "yaw": 5.87,
+        "roll": -5.15,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.789,
+        "mouthSmileRight": 0.726,
+        "eyeBlinkLeft": 0.499,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.195,
+        "jawOpen": 0.035
+      }
+    },
+    {
+      "timeOffsetMs": 1333,
+      "headPose": {
+        "pitch": -1.56,
+        "yaw": 5.59,
+        "roll": -4.94,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.795,
+        "mouthSmileRight": 0.731,
+        "eyeBlinkLeft": 0.339,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.133,
+        "jawOpen": 0.024
+      }
+    },
+    {
+      "timeOffsetMs": 1367,
+      "headPose": {
+        "pitch": -1.78,
+        "yaw": 5.3,
+        "roll": -4.72,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.799,
+        "mouthSmileRight": 0.735,
+        "eyeBlinkLeft": 0.171,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0.067,
+        "jawOpen": 0.012
+      }
+    },
+    {
+      "timeOffsetMs": 1400,
+      "headPose": {
+        "pitch": -2,
+        "yaw": 5,
+        "roll": -4.5,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.8,
+        "mouthSmileRight": 0.736,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 1433,
+      "headPose": {
+        "pitch": -1.03,
+        "yaw": 4.88,
+        "roll": -4.39,
+        "x": 0,
+        "y": 0,
+        "z": 0.006
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.79,
+        "mouthSmileRight": 0.727,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.018
+      }
+    },
+    {
+      "timeOffsetMs": 1467,
+      "headPose": {
+        "pitch": -0.08,
+        "yaw": 4.76,
+        "roll": -4.29,
+        "x": 0,
+        "y": 0,
+        "z": 0.0118
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.781,
+        "mouthSmileRight": 0.718,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.035
+      }
+    },
+    {
+      "timeOffsetMs": 1500,
+      "headPose": {
+        "pitch": 0.82,
+        "yaw": 4.64,
+        "roll": -4.18,
+        "x": 0,
+        "y": 0,
+        "z": 0.0174
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.771,
+        "mouthSmileRight": 0.71,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.052
+      }
+    },
+    {
+      "timeOffsetMs": 1533,
+      "headPose": {
+        "pitch": 1.66,
+        "yaw": 4.52,
+        "roll": -4.07,
+        "x": 0,
+        "y": 0,
+        "z": 0.0225
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.762,
+        "mouthSmileRight": 0.701,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.068
+      }
+    },
+    {
+      "timeOffsetMs": 1567,
+      "headPose": {
+        "pitch": 2.42,
+        "yaw": 4.4,
+        "roll": -3.96,
+        "x": 0,
+        "y": 0,
+        "z": 0.0272
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.752,
+        "mouthSmileRight": 0.692,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.082
+      }
+    },
+    {
+      "timeOffsetMs": 1600,
+      "headPose": {
+        "pitch": 3.08,
+        "yaw": 4.29,
+        "roll": -3.86,
+        "x": 0,
+        "y": 0,
+        "z": 0.0313
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.743,
+        "mouthSmileRight": 0.683,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.094
+      }
+    },
+    {
+      "timeOffsetMs": 1633,
+      "headPose": {
+        "pitch": 3.63,
+        "yaw": 4.17,
+        "roll": -3.75,
+        "x": 0,
+        "y": 0,
+        "z": 0.0346
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.733,
+        "mouthSmileRight": 0.675,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.104
+      }
+    },
+    {
+      "timeOffsetMs": 1667,
+      "headPose": {
+        "pitch": 4.05,
+        "yaw": 4.05,
+        "roll": -3.64,
+        "x": 0,
+        "y": 0,
+        "z": 0.0372
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.724,
+        "mouthSmileRight": 0.666,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.112
+      }
+    },
+    {
+      "timeOffsetMs": 1700,
+      "headPose": {
+        "pitch": 4.34,
+        "yaw": 3.93,
+        "roll": -3.54,
+        "x": 0,
+        "y": 0,
+        "z": 0.039
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.714,
+        "mouthSmileRight": 0.657,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.117
+      }
+    },
+    {
+      "timeOffsetMs": 1733,
+      "headPose": {
+        "pitch": 4.48,
+        "yaw": 3.81,
+        "roll": -3.43,
+        "x": 0,
+        "y": 0,
+        "z": 0.0399
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.705,
+        "mouthSmileRight": 0.648,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.12
+      }
+    },
+    {
+      "timeOffsetMs": 1767,
+      "headPose": {
+        "pitch": 4.48,
+        "yaw": 3.69,
+        "roll": -3.32,
+        "x": 0,
+        "y": 0,
+        "z": 0.0399
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.695,
+        "mouthSmileRight": 0.64,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.12
+      }
+    },
+    {
+      "timeOffsetMs": 1800,
+      "headPose": {
+        "pitch": 4.34,
+        "yaw": 3.57,
+        "roll": -3.21,
+        "x": 0,
+        "y": 0,
+        "z": 0.039
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.686,
+        "mouthSmileRight": 0.631,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.117
+      }
+    },
+    {
+      "timeOffsetMs": 1833,
+      "headPose": {
+        "pitch": 4.05,
+        "yaw": 3.45,
+        "roll": -3.11,
+        "x": 0,
+        "y": 0,
+        "z": 0.0372
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.676,
+        "mouthSmileRight": 0.622,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.112
+      }
+    },
+    {
+      "timeOffsetMs": 1867,
+      "headPose": {
+        "pitch": 3.63,
+        "yaw": 3.33,
+        "roll": -3,
+        "x": 0,
+        "y": 0,
+        "z": 0.0346
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.667,
+        "mouthSmileRight": 0.613,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.104
+      }
+    },
+    {
+      "timeOffsetMs": 1900,
+      "headPose": {
+        "pitch": 3.08,
+        "yaw": 3.21,
+        "roll": -2.89,
+        "x": 0,
+        "y": 0,
+        "z": 0.0313
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.657,
+        "mouthSmileRight": 0.605,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.094
+      }
+    },
+    {
+      "timeOffsetMs": 1933,
+      "headPose": {
+        "pitch": 2.42,
+        "yaw": 3.1,
+        "roll": -2.79,
+        "x": 0,
+        "y": 0,
+        "z": 0.0272
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.648,
+        "mouthSmileRight": 0.596,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.082
+      }
+    },
+    {
+      "timeOffsetMs": 1967,
+      "headPose": {
+        "pitch": 1.66,
+        "yaw": 2.98,
+        "roll": -2.68,
+        "x": 0,
+        "y": 0,
+        "z": 0.0225
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.638,
+        "mouthSmileRight": 0.587,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.068
+      }
+    },
+    {
+      "timeOffsetMs": 2000,
+      "headPose": {
+        "pitch": 0.82,
+        "yaw": 2.86,
+        "roll": -2.57,
+        "x": 0,
+        "y": 0,
+        "z": 0.0174
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.629,
+        "mouthSmileRight": 0.578,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.052
+      }
+    },
+    {
+      "timeOffsetMs": 2033,
+      "headPose": {
+        "pitch": -0.08,
+        "yaw": 2.74,
+        "roll": -2.46,
+        "x": 0,
+        "y": 0,
+        "z": 0.0118
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.619,
+        "mouthSmileRight": 0.57,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.035
+      }
+    },
+    {
+      "timeOffsetMs": 2067,
+      "headPose": {
+        "pitch": -1.03,
+        "yaw": 2.62,
+        "roll": -2.36,
+        "x": 0,
+        "y": 0,
+        "z": 0.006
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.61,
+        "mouthSmileRight": 0.561,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0.018
+      }
+    },
+    {
+      "timeOffsetMs": 2100,
+      "headPose": {
+        "pitch": 1,
+        "yaw": 2.5,
+        "roll": -2.25,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.6,
+        "mouthSmileRight": 0.552,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2133,
+      "headPose": {
+        "pitch": 0.91,
+        "yaw": 2.27,
+        "roll": -2.04,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.544,
+        "mouthSmileRight": 0.501,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2167,
+      "headPose": {
+        "pitch": 0.82,
+        "yaw": 2.05,
+        "roll": -1.84,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.491,
+        "mouthSmileRight": 0.452,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2200,
+      "headPose": {
+        "pitch": 0.73,
+        "yaw": 1.84,
+        "roll": -1.65,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.441,
+        "mouthSmileRight": 0.406,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2233,
+      "headPose": {
+        "pitch": 0.66,
+        "yaw": 1.64,
+        "roll": -1.47,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.393,
+        "mouthSmileRight": 0.362,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2267,
+      "headPose": {
+        "pitch": 0.58,
+        "yaw": 1.45,
+        "roll": -1.31,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.348,
+        "mouthSmileRight": 0.32,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2300,
+      "headPose": {
+        "pitch": 0.51,
+        "yaw": 1.28,
+        "roll": -1.15,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.306,
+        "mouthSmileRight": 0.282,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2333,
+      "headPose": {
+        "pitch": 0.44,
+        "yaw": 1.11,
+        "roll": -1,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.267,
+        "mouthSmileRight": 0.245,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2367,
+      "headPose": {
+        "pitch": 0.38,
+        "yaw": 0.96,
+        "roll": -0.86,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.23,
+        "mouthSmileRight": 0.212,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2400,
+      "headPose": {
+        "pitch": 0.33,
+        "yaw": 0.82,
+        "roll": -0.73,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.196,
+        "mouthSmileRight": 0.18,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2433,
+      "headPose": {
+        "pitch": 0.27,
+        "yaw": 0.69,
+        "roll": -0.62,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.165,
+        "mouthSmileRight": 0.151,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2467,
+      "headPose": {
+        "pitch": 0.23,
+        "yaw": 0.57,
+        "roll": -0.51,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.136,
+        "mouthSmileRight": 0.125,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2500,
+      "headPose": {
+        "pitch": 0.18,
+        "yaw": 0.46,
+        "roll": -0.41,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.11,
+        "mouthSmileRight": 0.101,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2533,
+      "headPose": {
+        "pitch": 0.15,
+        "yaw": 0.36,
+        "roll": -0.33,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.087,
+        "mouthSmileRight": 0.08,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2567,
+      "headPose": {
+        "pitch": 0.11,
+        "yaw": 0.28,
+        "roll": -0.25,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.067,
+        "mouthSmileRight": 0.061,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2600,
+      "headPose": {
+        "pitch": 0.08,
+        "yaw": 0.2,
+        "roll": -0.18,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.049,
+        "mouthSmileRight": 0.045,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2633,
+      "headPose": {
+        "pitch": 0.06,
+        "yaw": 0.14,
+        "roll": -0.13,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.034,
+        "mouthSmileRight": 0.031,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2667,
+      "headPose": {
+        "pitch": 0.04,
+        "yaw": 0.09,
+        "roll": -0.08,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.022,
+        "mouthSmileRight": 0.02,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2700,
+      "headPose": {
+        "pitch": 0.02,
+        "yaw": 0.05,
+        "roll": -0.05,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.012,
+        "mouthSmileRight": 0.011,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2733,
+      "headPose": {
+        "pitch": 0.01,
+        "yaw": 0.02,
+        "roll": -0.02,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.005,
+        "mouthSmileRight": 0.005,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    },
+    {
+      "timeOffsetMs": 2767,
+      "headPose": {
+        "pitch": 0,
+        "yaw": 0.01,
+        "roll": -0.01,
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "blendshapes": {
+        "mouthSmileLeft": 0.001,
+        "mouthSmileRight": 0.001,
+        "eyeBlinkLeft": 0,
+        "eyeBlinkRight": 0,
+        "browOuterUpRight": 0,
+        "jawOpen": 0
+      }
+    }
+  ],
+  "filename": "preset_clin_doeil_sourire.json"
+}

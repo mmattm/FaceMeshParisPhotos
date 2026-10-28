@@ -26,13 +26,16 @@ export class VisitorDetector extends EventTarget {
     this.cranial = new CranialCoordinateSystem();
     this.cranial.setAspectRatio(16 / 9);
 
-    // Decision Thresholds
-    // Drastic difference required: morphometric difference >= 0.16 AND total dissimilarity >= 0.20
-    // Must have lost tracking for at least 1500ms before a new visitor can ever be triggered
-    this.DISSIMILARITY_THRESHOLD = options.threshold || 0.20;
-    this.MORPH_THRESHOLD = options.morphThreshold || 0.16;
-    this.MIN_ABSENCE_FOR_NEW_VISITOR_MS = options.minAbsenceMs || 1500;
-    this.LONG_ABSENCE_RESET_MS = options.longAbsenceMs || 20000; // 20s empty room resets session
+    // Decision Thresholds & Sensitivity (10% to 100%, default: 50%)
+    this.sensitivity = options.sensitivity !== undefined ? options.sensitivity : 50;
+    this.DISSIMILARITY_THRESHOLD = options.threshold || 0.13;
+    this.MORPH_THRESHOLD = options.morphThreshold || 0.11;
+    this.MIN_ABSENCE_FOR_NEW_VISITOR_MS = options.minAbsenceMs || 700;
+    this.LONG_ABSENCE_RESET_MS = options.longAbsenceMs || 12000;
+    this.CANDIDATE_WINDOW_SIZE = options.windowSize || 4;
+
+    // Calibrate thresholds with current sensitivity
+    this.setSensitivity(this.sensitivity);
 
     // Visitor Signature State
     this.activeVisitorSignature = null;
@@ -40,10 +43,10 @@ export class VisitorDetector extends EventTarget {
     this.lastDetectedTimestamp = 0;
     this.lastAbsenceDuration = 0;
     this.faceAbsentStartTime = 0;
+    this.currentArrivalAbsenceDuration = 0;
 
-    // Rolling Candidate Window (6 frames required for rock-solid consensus)
+    // Rolling Candidate Window
     this.candidateWindow = [];
-    this.CANDIDATE_WINDOW_SIZE = 6;
 
     // Small offscreen canvas for sampling stable skin chromaticity
     if (typeof document !== 'undefined') {
@@ -55,6 +58,31 @@ export class VisitorDetector extends EventTarget {
       this.sampleCanvas = null;
       this.sampleCtx = null;
     }
+  }
+
+  /**
+   * Sets visitor detection sensitivity (10% to 100%).
+   * Higher sensitivity allows faster detection and lower biometric thresholds.
+   */
+  setSensitivity(percent = 50) {
+    this.sensitivity = Math.max(10, Math.min(100, Math.round(Number(percent) || 50)));
+    const norm = (this.sensitivity - 10) / 90; // 0.0 (strict) to 1.0 (ultra-sensitive)
+
+    // Dynamic thresholds:
+    // Low (10%): minAbsence 1500ms, morphThresh 0.16, dissimThresh 0.19, window 5, longAbsence 20s
+    // Default (50%): minAbsence 700ms, morphThresh 0.11, dissimThresh 0.13, window 4, longAbsence 12s
+    // High (100%): minAbsence 250ms, morphThresh 0.065, dissimThresh 0.08, window 3, longAbsence 5s
+    this.MIN_ABSENCE_FOR_NEW_VISITOR_MS = Math.round(1500 - norm * 1250);
+    this.MORPH_THRESHOLD = Number((0.16 - norm * 0.095).toFixed(3));
+    this.DISSIMILARITY_THRESHOLD = Number((0.19 - norm * 0.11).toFixed(3));
+    this.CANDIDATE_WINDOW_SIZE = Math.max(3, Math.round(5 - norm * 2));
+    this.LONG_ABSENCE_RESET_MS = Math.round(20000 - norm * 15000);
+
+    console.log(`[VisitorDetector] ⚙️ Sensibilité: ${this.sensitivity}% (Absence min: ${this.MIN_ABSENCE_FOR_NEW_VISITOR_MS}ms, Seuil morpho: ${this.MORPH_THRESHOLD}, Dissim: ${this.DISSIMILARITY_THRESHOLD}, Fenêtre: ${this.CANDIDATE_WINDOW_SIZE})`);
+  }
+
+  getSensitivity() {
+    return this.sensitivity;
   }
 
   setAspectRatio(ar) {
@@ -292,9 +320,11 @@ export class VisitorDetector extends EventTarget {
     }
     this.lastDetectedTimestamp = now;
 
-    // Filter out extreme side angles (yaw > 28°, pitch > 24°) to ensure high-quality biometric signature
+    // Filter out extreme side angles to ensure high-quality biometric signature
     const headPose = rawTracking.headPose || { pitch: 0, yaw: 0, roll: 0 };
-    const isFrontalEnough = Math.abs(headPose.yaw || 0) < 28.0 && Math.abs(headPose.pitch || 0) < 24.0;
+    const maxYaw = 28 + (this.sensitivity >= 60 ? 6 : 0);
+    const maxPitch = 24 + (this.sensitivity >= 60 ? 4 : 0);
+    const isFrontalEnough = Math.abs(headPose.yaw || 0) < maxYaw && Math.abs(headPose.pitch || 0) < maxPitch;
 
     if (!isFrontalEnough && this.activeVisitorSignature) {
       // User is looking sharply sideways; maintain current visitor classification
@@ -323,8 +353,9 @@ export class VisitorDetector extends EventTarget {
       this.candidateWindow.shift();
     }
 
-    // Require at least 5 stable frames to form a consensus before deciding
-    if (this.candidateWindow.length < 5) {
+    // Require stable consensus frames before deciding
+    const minConsensusFrames = Math.max(2, this.CANDIDATE_WINDOW_SIZE - 1);
+    if (this.candidateWindow.length < minConsensusFrames) {
       return {
         isPresent: true,
         isNewVisitor: false,
@@ -359,34 +390,25 @@ export class VisitorDetector extends EventTarget {
     }
 
     // CASE 2: Compare candidate with active visitor signature
-    // STRICT RULE: Can NEVER trigger new visitor if tracking was continuous (absence < 1500ms).
-    // The user must have left and tracking must have dropped before a new visitor can ever be evaluated.
     const absenceDuration = this.currentArrivalAbsenceDuration || 0;
-    const hadRealAbsence = absenceDuration >= this.MIN_ABSENCE_FOR_NEW_VISITOR_MS;
+    const hadAbsence = absenceDuration >= this.MIN_ABSENCE_FOR_NEW_VISITOR_MS;
+    const isLongAbsence = absenceDuration >= this.LONG_ABSENCE_RESET_MS;
 
-    if (!hadRealAbsence) {
-      // Continuous tracking: user is actively in front of camera, keep active visitor
-      return {
-        isPresent: true,
-        isNewVisitor: false,
-        dissimilarity: 0,
-        signature: this.activeVisitorSignature
-      };
-    }
-
-    // Tracking was lost for at least 1.5s, now a face is detected: compare signatures
     const diff = this.compareSignatures(candidateProfile, this.activeVisitorSignature);
     const dissimilarity = diff.total !== undefined ? diff.total : Number(diff);
     const dMorph = diff.dMorph !== undefined ? diff.dMorph : dissimilarity;
-    const isLongAbsence = absenceDuration >= this.LONG_ABSENCE_RESET_MS;
 
-    // Drastic difference: both cranial points arrangement (dMorph >= 0.16) and total (>= 0.20),
-    // OR extreme morphometric difference (dMorph >= 0.22), OR empty room for > 20s
-    const isDrasticDifference = (dMorph >= this.MORPH_THRESHOLD && dissimilarity >= this.DISSIMILARITY_THRESHOLD) || (dMorph >= 0.22);
+    // Detection criteria:
+    // 1) Long absence (> 12-20s): automatically new visitor on arrival
+    // 2) Arrival after absence: hadAbsence AND (dMorph >= MORPH_THRESHOLD || dissimilarity >= DISSIMILARITY_THRESHOLD)
+    // 3) Direct face swap: new person sitting in immediately, consensus window persistently exhibits marked biometric difference
+    const isDrasticWithAbsence = hadAbsence && (dMorph >= this.MORPH_THRESHOLD || dissimilarity >= this.DISSIMILARITY_THRESHOLD);
+    const isDirectSwap = (this.candidateWindow.length >= this.CANDIDATE_WINDOW_SIZE) &&
+                         (dMorph >= this.MORPH_THRESHOLD * 1.15 && dissimilarity >= this.DISSIMILARITY_THRESHOLD * 1.15);
 
-    if (isDrasticDifference || isLongAbsence) {
-      const reason = isLongAbsence ? 'LONG_ABSENCE' : 'DRASTIC_BIOMETRIC_CHANGE';
-      console.log(`[VisitorDetector] 👤 Nouveau visiteur confirmé ! (Absence: ${Math.round(absenceDuration)}ms, Diff totale: ${dissimilarity.toFixed(3)}, Diff morpho points: ${dMorph.toFixed(3)})`);
+    if (isLongAbsence || isDrasticWithAbsence || isDirectSwap) {
+      const reason = isLongAbsence ? 'LONG_ABSENCE' : (isDirectSwap && !hadAbsence ? 'DIRECT_FACE_SWAP' : 'BIOMETRIC_CHANGE');
+      console.log(`[VisitorDetector] 👤 Nouveau visiteur confirmé ! (${reason}, Absence: ${Math.round(absenceDuration)}ms, Diff totale: ${dissimilarity.toFixed(3)}, Diff morpho: ${dMorph.toFixed(3)})`);
 
       this.previousVisitorSignature = this.activeVisitorSignature;
       this.activeVisitorSignature = candidateProfile;
@@ -410,7 +432,7 @@ export class VisitorDetector extends EventTarget {
       };
     }
 
-    // Returning visitor (same person returning after a brief departure)
+    // Returning visitor or continuous presence
     this.currentArrivalAbsenceDuration = 0;
     this.candidateWindow = [];
     return {

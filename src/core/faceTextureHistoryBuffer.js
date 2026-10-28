@@ -11,7 +11,7 @@
  *    Strict boundary clearance guarantees that forehead, chin, cheeks, and nose
  *    are fully inside the frame with at least 8% margins.
  * 3. Straight & Aligned (Bien droit):
- *    Requires frontal head pose: |yaw| <= 12°, |pitch| <= 12°, |roll| <= 8°.
+ *    Requires frontal head pose: |yaw| <= 10°, |pitch| <= 10°, |roll| <= 6°.
  * 4. Centered (Bien centré):
  *    Heavily rewards face position centered around optimal portrait center (0.50, 0.48).
  * 5. Stillness (Pas de flou de mouvement):
@@ -26,6 +26,8 @@
  *    Multiple tiers of fallbacks ensure autonomous mode ALWAYS has a pristine, complete
  *    face texture for both the 3D mask and the background plane.
  */
+
+const CAPTURE_POSE_LIMITS = { yaw: 10, pitch: 10, roll: 6 };
 
 export class FaceTextureHistoryBuffer extends EventTarget {
   constructor(maxSnapshots = 20, minAgeMs = 1500) {
@@ -54,9 +56,9 @@ export class FaceTextureHistoryBuffer extends EventTarget {
     this.fallbackSnapshot = null;
     this.archivedReference = null;
     this.lastSampleTime = 0;
-    this.lastFallbackSampleTime = 0;
+    this.lastFallbackSampleTime = -Infinity;
 
-    // Motion tracking history (rolling 15 frames)
+    // Short motion history reacts quickly when the visitor settles into position.
     this.recentMotionHistory = [];
     this.lastTrackedLandmarks = null;
     this.lastPose = null;
@@ -93,7 +95,7 @@ export class FaceTextureHistoryBuffer extends EventTarget {
     this.bestOverallSnapshot = null;
     this.fallbackSnapshot = null;
     this.lastSampleTime = 0;
-    this.lastFallbackSampleTime = 0;
+    this.lastFallbackSampleTime = -Infinity;
 
     this.recentMotionHistory = [];
     this.lastTrackedLandmarks = null;
@@ -110,12 +112,12 @@ export class FaceTextureHistoryBuffer extends EventTarget {
    * 1. Safe Margins: Face completely inside frame (>= 8% margin) - NEVER cut off!
    * 2. Proportions: Height >= 20%, Width >= 16%, aspect ratio 1.12 - 1.68.
    * 3. Centering: Face center within 0.22 of optimal (0.50, 0.48).
-   * 4. Frontal: Yaw <= 12°, Pitch <= 12°, Roll <= 8°.
+   * 4. Frontal: Yaw <= 10°, Pitch <= 10°, Roll <= 6°.
    * 5. Stillness: Rolling displacement < 0.0040.
    * 6. Anti-Obstruction: 8 symmetry pairs, open eyes, closed resting mouth.
    */
-  evaluateFaceQuality(lms, pose, avgMotionBefore, motionDelta) {
-    if (!lms || lms.length < 468 || !pose) return null;
+  evaluateFaceQuality(lms, pose, avgMotionBefore, motionDelta, aspectRatio = 1) {
+    if (!lms || lms.length < 468 || !this.isCapturePoseAligned(pose)) return null;
 
     const nasion = lms[168] || lms[6];
     const noseTip = lms[1];
@@ -148,7 +150,8 @@ export class FaceTextureHistoryBuffer extends EventTarget {
     }
 
     // Normal cranial proportions (aspect ratio)
-    const faceAspect = faceHeight / Math.max(0.01, faceWidth);
+    // Landmarks are normalized per axis; correct for wide webcam frames.
+    const faceAspect = faceHeight / Math.max(0.01, faceWidth * aspectRatio);
     if (faceAspect < 1.12 || faceAspect > 1.68) {
       return null; // Distorted proportions
     }
@@ -167,9 +170,6 @@ export class FaceTextureHistoryBuffer extends EventTarget {
     const pitch = Math.abs(pose.pitch || 0);
     const roll = Math.abs(pose.roll || 0);
 
-    if (yaw > 12.0 || pitch > 12.0 || roll > 8.0) {
-      return null; // Turned away
-    }
     const sFrontal = Math.exp(-((yaw / 6.0) ** 2 + (pitch / 6.0) ** 2 + (roll / 4.5) ** 2));
     const angleMagnitude = Math.hypot(yaw * 1.2, pitch * 1.1, roll * 0.9);
 
@@ -296,6 +296,17 @@ export class FaceTextureHistoryBuffer extends EventTarget {
     };
   }
 
+  isCapturePoseAligned(pose) {
+    return Object.entries(CAPTURE_POSE_LIMITS).every(([axis, limit]) =>
+      Number.isFinite(pose?.[axis]) && Math.abs(pose[axis]) <= limit);
+  }
+
+  hasCurrentVisitorSnapshot() {
+    return [this.bestOverallSnapshot, this.fallbackSnapshot].some(snapshot =>
+      snapshot?.canvas?.width > 0 && snapshot.canvas.height > 0
+      && snapshot.landmarks?.length >= 468 && this.isCapturePoseAligned(snapshot.headPose));
+  }
+
   /**
    * Monitor live frames, calculate multi-point stillness, evaluate quality,
    * and store qualified candidate screenshots into dedicated non-overwritten canvases.
@@ -306,7 +317,8 @@ export class FaceTextureHistoryBuffer extends EventTarget {
     }
 
     const lms = rawTracking.landmarks;
-    const pose = rawTracking.headPose || { pitch: 0, yaw: 0, roll: 0 };
+    const pose = rawTracking.headPose;
+    if (!pose) return;
 
     // 1. Multi-Point Landmark Displacement & Angular Velocity
     let landmarkDisp = 0;
@@ -342,9 +354,12 @@ export class FaceTextureHistoryBuffer extends EventTarget {
     this.lastPose = { yaw: pose.yaw || 0, pitch: pose.pitch || 0, roll: pose.roll || 0 };
 
     this.recentMotionHistory.push(motionDelta);
-    if (this.recentMotionHistory.length > 15) {
+    if (this.recentMotionHistory.length > 3) {
       this.recentMotionHistory.shift();
     }
+
+    // All captures, including safety fallbacks, must have a known frontal pose.
+    if (!this.isCapturePoseAligned(pose)) return;
 
     // 2. Safety Fallback Snapshot:
     // Any complete face comfortably inside frame (margins >= 6%) is recorded as fallback
@@ -359,6 +374,7 @@ export class FaceTextureHistoryBuffer extends EventTarget {
       now - this.lastFallbackSampleTime >= 800
     ) {
       this.lastFallbackSampleTime = now;
+      const isFirstFallback = !this.fallbackSnapshot;
       if (!this.fallbackSnapshot) {
         const fc = document.createElement('canvas');
         fc.width = videoEl.videoWidth || 1280;
@@ -375,10 +391,15 @@ export class FaceTextureHistoryBuffer extends EventTarget {
       this.fallbackSnapshot.landmarks = lms.map(p => ({ x: p.x, y: p.y, z: p.z || 0, visibility: p.visibility }));
       this.fallbackSnapshot.headPose = { yaw: pose.yaw || 0, pitch: pose.pitch || 0, roll: pose.roll || 0 };
       this.fallbackSnapshot.timestamp = now;
-    }
-
-    if (this.recentMotionHistory.length < 5) {
-      return;
+      if (isFirstFallback && !this.bestOverallSnapshot) {
+        this.dispatchEvent(new CustomEvent('fallback-capture', {
+          detail: {
+            canvas: this.fallbackSnapshot.canvas,
+            landmarks: this.fallbackSnapshot.landmarks,
+            timestamp: now
+          }
+        }));
+      }
     }
 
     let sumMotion = 0;
@@ -388,7 +409,8 @@ export class FaceTextureHistoryBuffer extends EventTarget {
     const avgMotionBefore = sumMotion / this.recentMotionHistory.length;
 
     // 3. Pristine Quality Evaluation
-    const evalResult = this.evaluateFaceQuality(lms, pose, avgMotionBefore, motionDelta);
+    const aspectRatio = (videoEl.videoWidth || 1280) / Math.max(1, videoEl.videoHeight || 720);
+    const evalResult = this.evaluateFaceQuality(lms, pose, avgMotionBefore, motionDelta, aspectRatio);
     if (!evalResult) {
       return;
     }
@@ -397,7 +419,9 @@ export class FaceTextureHistoryBuffer extends EventTarget {
     const isNewRecord = !this.bestOverallSnapshot || evalResult.compositeScore > this.bestOverallSnapshot.score;
 
     // Record candidate at least every 150ms or on new record score
-    if ((timeSinceLast >= 150 || isNewRecord) && evalResult.compositeScore >= 180) {
+    // Hard quality checks already passed: save the first usable frame immediately,
+    // then let the score select improvements rather than delay the first capture.
+    if (timeSinceLast >= 150 || isNewRecord) {
       this.lastSampleTime = now;
 
       const entry = this._createSnapshotEntry(videoEl, lms, pose, evalResult.compositeScore, now);
@@ -411,20 +435,22 @@ export class FaceTextureHistoryBuffer extends EventTarget {
       if (isNewRecord) {
         this.bestOverallSnapshot = entry;
 
+        let dataUrl = null;
         try {
-          const dataUrl = this.getPristineSnapshotDataUrl(entry.canvas, true);
-          this.dispatchEvent(new CustomEvent('pristine-capture', {
-            detail: {
-              canvas: entry.canvas,
-              landmarks: entry.landmarks,
-              pose: entry.headPose,
-              score: entry.score,
-              dataUrl
-            }
-          }));
-        } catch (e) {
-          // Ignore
+          dataUrl = this.getPristineSnapshotDataUrl(entry.canvas, true);
+        } catch (error) {
+          console.warn('[FaceTextureHistoryBuffer] Export JPEG indisponible ; cliché conservé en mémoire.', error);
         }
+        // The in-memory capture succeeds even if optional JPEG export fails.
+        this.dispatchEvent(new CustomEvent('pristine-capture', {
+          detail: {
+            canvas: entry.canvas,
+            landmarks: entry.landmarks,
+            pose: entry.headPose,
+            score: entry.score,
+            dataUrl
+          }
+        }));
       }
     }
   }
@@ -468,7 +494,12 @@ export class FaceTextureHistoryBuffer extends EventTarget {
    */
   getBestVisitorBackupFrame(now = performance.now(), minAgeMs = this.minAgeMs) {
     // 1. Look for qualified snapshots older than minAgeMs (before visitor departure)
-    const validAgeSnapshots = this.snapshots.filter(s => (now - s.timestamp) >= minAgeMs);
+    const candidates = [...this.snapshots];
+    // The best canvas stays in memory even after the rolling history expires.
+    if (this.bestOverallSnapshot && !candidates.includes(this.bestOverallSnapshot)) {
+      candidates.push(this.bestOverallSnapshot);
+    }
+    const validAgeSnapshots = candidates.filter(s => (now - s.timestamp) >= minAgeMs);
 
     if (validAgeSnapshots.length > 0) {
       let best = validAgeSnapshots[0];

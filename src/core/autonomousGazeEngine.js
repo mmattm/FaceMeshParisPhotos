@@ -20,6 +20,14 @@
 
 import * as THREE from 'three';
 import { CranialCoordinateSystem } from '../mocap/cranialCoordinateSystem.js';
+import { PresetAudioLipSync } from '../audio/presetAudioLipSync.js';
+import { deformMouth } from '../mocap/mouthDeformer.js';
+
+// Keep the face centered while allowing a little movement in depth.
+const AUTONOMOUS_LATERAL_TRANSLATION_SCALE = 0;
+const AUTONOMOUS_DEPTH_TRANSLATION_SCALE = 0.35;
+const MAX_AUTONOMOUS_YAW = 42;
+const HEAD_POSE_INDICES = [10, 33, 133, 152, 234, 263, 362, 454];
 
 export class AutonomousGazeEngine extends EventTarget {
   constructor() {
@@ -29,6 +37,7 @@ export class AutonomousGazeEngine extends EventTarget {
     this.isActive = false;
     this.hasSeenFace = false;
     this.isMirrored = true;
+    this.presetExpressionIntensity = 1.6;
 
     // Base face geometry for UV mapping & deformation
     this.baseLandmarks = null;
@@ -65,7 +74,7 @@ export class AutonomousGazeEngine extends EventTarget {
     this.transFromLandmarks = null;
 
     // Rhythm state
-    this.currentRhythmMode = 'CAMERA_CONTACT';
+    this.currentRhythmMode = 'SOFT_SIDE_GLANCE';
     this.consecutiveOffCenterLooks = 0;
     this.doubleSaccadePending = false;
     this.doubleSaccadeTarget = null;
@@ -124,6 +133,12 @@ export class AutonomousGazeEngine extends EventTarget {
     // Eyebrow landmark sets (MediaPipe FaceMesh topology)
     this.EYEBROW_R = new Set([70, 63, 105, 66, 107, 55, 65, 52, 53, 46]);
     this.EYEBROW_L = new Set([300, 293, 334, 296, 336, 285, 295, 282, 283, 276]);
+    this.presetEyeIndices = new Set([...this.EYE_R_UPPER, ...this.EYE_R_LOWER,
+      ...this.EYE_L_UPPER, ...this.EYE_L_LOWER, ...this.EYE_R_CREASE, ...this.EYE_L_CREASE]);
+    this.presetLipIndices = new Set([0, 11, 12, 13, 14, 15, 16, 17, 37, 39, 40,
+      61, 76, 77, 78, 80, 81, 82, 84, 85, 86, 87, 88, 91, 95, 146, 178, 179, 180, 181,
+      267, 269, 270, 291, 306, 307, 308, 310, 311, 312, 314, 315, 316, 317, 318, 321, 324, 375, 402, 403, 405]);
+    this.presetJawIndices = new Set([18, 148, 149, 150, 152, 175, 176, 199, 200, 377, 378, 379, 400]);
 
     // =========================================================================
     // Recorded Animation Playback & Frequency Switcher System
@@ -145,6 +160,7 @@ export class AutonomousGazeEngine extends EventTarget {
     this.audioPlaybackPerfNow = 0;
     this.currentAudio = null; // Legacy HTMLAudioElement fallback
     this.audioDelaySec = 2.2; // Default audio delay / offset in seconds (range: 0s to 4s)
+    this.presetAudio = new PresetAudioLipSync();
 
     // Exact rendered state on the last generated frame (used for mathematically seamless handoffs)
     this.lastRenderedPitch = 0;
@@ -156,6 +172,8 @@ export class AutonomousGazeEngine extends EventTarget {
     this.lastRenderedGazeX = 0;
     this.lastRenderedGazeY = 0;
     this.lastRenderedLandmarks = null;
+    this.lastPoseLandmarks = null;
+    this.nextAudioStartTime = 0;
 
     // Anchor state captured at the exact moment an animation playback is initiated
     this.animTransitionFrom = null;
@@ -219,6 +237,93 @@ export class AutonomousGazeEngine extends EventTarget {
     this.animLibrary = animLibrary;
   }
 
+  setPresetExpressionIntensity(value) {
+    if (Number.isFinite(value)) this.presetExpressionIntensity = Math.max(0.5, Math.min(2.2, value));
+  }
+
+  amplifyPresetExpressions(neutral, expressive, preserveSpeech = false) {
+    if (!expressive || this.presetExpressionIntensity === 1) return expressive;
+    const extra = this.presetExpressionIntensity - 1;
+    for (let i = 0; i < expressive.length; i++) {
+      const base = neutral[i], point = expressive[i];
+      if (!base || !point) continue;
+      let horizontal = 1, vertical = 1, depth = 1;
+      if (this.EYEBROW_R.has(i) || this.EYEBROW_L.has(i)) {
+        horizontal += extra * 0.6;
+        vertical += extra;
+      } else if (this.presetEyeIndices.has(i)) {
+        vertical += extra * 0.6;
+      } else if (!preserveSpeech && this.presetLipIndices.has(i)) {
+        // Emphasize the smile's lift more than its width.
+        horizontal += extra * 0.15;
+        // Stronger expressions lift a smile without pulling the lower lip down.
+        vertical += extra * (point.y > base.y ? 0 : 0.85);
+        depth += extra * 0.4;
+      } else if (!preserveSpeech && this.presetJawIndices.has(i)) {
+        vertical += extra * (point.y > base.y ? 0 : 0.10);
+        depth += extra * 0.25;
+      } else continue;
+      point.x = base.x + (point.x - base.x) * horizontal;
+      point.y = base.y + (point.y - base.y) * vertical;
+      point.z = (base.z || 0) + ((point.z || 0) - (base.z || 0)) * depth;
+    }
+    return expressive;
+  }
+
+  async setPresetAudioEnabled(enabled) {
+    const context = enabled ? this.ensureAudioContext() : this.audioCtx;
+    await this.presetAudio.setEnabled(enabled, context, this.audioGainNode);
+    if (enabled && this.presetAudio.enabled && this.isActive) {
+      this.nextAudioStartTime = performance.now();
+      this.updatePresetAudioPlayback(this.nextAudioStartTime);
+    }
+  }
+
+  async setPresetAudioTracks(urls) {
+    await this.presetAudio.setTracks(urls);
+    if (this.isActive && this.presetAudio.enabled && !this.presetAudio.durationMs) {
+      this.nextAudioStartTime = performance.now();
+      this.updatePresetAudioPlayback(this.nextAudioStartTime);
+    }
+  }
+
+  getAnimationElapsed(now) {
+    return now - this.animStartTime;
+  }
+
+  updatePresetAudioPlayback(now) {
+    const audio = this.presetAudio;
+    if (!this.isActive || !this.baseLandmarks?.length || !audio.enabled || audio.previewing) return;
+    if (this.activeAnimation?.hasAudio || this.activeAnimation?.audioData || this.activeAnimation?._audioBuffer) return;
+    if (audio.durationMs) {
+      if (audio.elapsedMs < audio.playbackDurationMs) return;
+      audio.stop();
+      this.nextAudioStartTime = now + 3500 + Math.random() * 1500;
+    } else if (now >= this.nextAudioStartTime && !audio.play()) {
+      this.nextAudioStartTime = now + 500;
+    }
+  }
+
+  getAudioPlaybackStatus() {
+    const audio = this.presetAudio;
+    if (audio.durationMs && audio.context?.state === 'running' && audio.elapsedMs < audio.playbackDurationMs) {
+      return { label: decodeURIComponent(audio.url.split('/').pop()), playing: true };
+    }
+    const source = this.activeAudioSource;
+    if (source?.buffer && this.audioCtx?.state === 'running'
+      && this.audioCtx.currentTime >= this.audioPlaybackStartTime
+      && this.audioCtx.currentTime < this.audioPlaybackStartTime + source.buffer.duration) {
+      return { label: this.activeAnimation?.audioFilename || this.activeAnimation?.name || 'Audio enregistré', playing: true };
+    }
+    return { label: audio.enabled || this.activeAnimation?.hasAudio ? 'En attente' : 'Désactivé', playing: false };
+  }
+
+  getAnimationDuration(anim) {
+    const recordedAudioMs = anim._audioBuffer
+      ? (this.audioDelaySec ?? 2.2) * 1000 + anim._audioBuffer.duration * 1000 : 0;
+    return Math.max(anim.durationMs, recordedAudioMs);
+  }
+
   setMirrored(isMirrored) {
     this.isMirrored = !!isMirrored;
   }
@@ -243,10 +348,12 @@ export class AutonomousGazeEngine extends EventTarget {
    * Reset autonomous memory completely upon new face detection
    */
   resetAutonomousMemory() {
+    this.stopAudio();
     this.baseLandmarks = null;
     this.lastHeadPose = null;
     this.lastAutonomousLandmarks = null;
     this.lastAutonomousHeadPose = null;
+    this.lastPoseLandmarks = null;
     this.hasSeenFace = false;
     this.currentHead = { pitch: 0, yaw: 0, roll: 0 };
     this.targetHead = { pitch: 0, yaw: 0, roll: 0 };
@@ -303,7 +410,11 @@ export class AutonomousGazeEngine extends EventTarget {
    * Trigger transition into autonomous mode with smooth ease-in glide to center
    */
   startAutonomous(now = performance.now(), initialLandmarks = null, initialHeadPose = null) {
+    this.stopAudio();
     this.isActive = true;
+    this.lastRenderedLandmarks = null;
+    this.lastPoseLandmarks = null;
+    this.nextAudioStartTime = now;
 
     if (initialLandmarks && initialLandmarks.length > 0) {
       this.transFromLandmarks = initialLandmarks.map(p => ({
@@ -324,16 +435,19 @@ export class AutonomousGazeEngine extends EventTarget {
     const initPitch = Number(initialHeadPose?.pitch) || 0;
     const initYaw = Number(initialHeadPose?.yaw) || 0;
     const initRoll = Number(initialHeadPose?.roll) || 0;
-    const initTransX = (Number(initialHeadPose?.x) || 0) / 1280;
-    const initTransY = (Number(initialHeadPose?.y) || 0) / 720;
     const initTransZ = (Number(initialHeadPose?.z) || 0) / 1280;
-    this.currentHead = { pitch: initPitch, yaw: initYaw, roll: initRoll };
-    this.targetHead = { pitch: 0, yaw: 0, roll: 0 };
-    this.currentTrans = { x: initTransX, y: initTransY, z: initTransZ };
+    const initialSide = Math.sign(initYaw) || (Math.random() > 0.5 ? 1 : -1);
+    this.currentHead = {
+      pitch: initPitch,
+      yaw: Math.max(-MAX_AUTONOMOUS_YAW, Math.min(MAX_AUTONOMOUS_YAW, initYaw)),
+      roll: initRoll
+    };
+    this.targetHead = { pitch: -3, yaw: initialSide * 18, roll: -initialSide * 2 };
+    this.currentTrans = { x: 0, y: 0, z: initTransZ };
     this.targetTrans = { x: 0, y: 0, z: 0 };
-    this.currentGaze = { x: 0, y: 0 };
-    this.targetGaze = { x: 0, y: 0 };
-    this.fromGaze = { x: 0, y: 0 };
+    this.currentGaze = { x: initialSide * 0.18, y: 0.05 };
+    this.targetGaze = { ...this.currentGaze };
+    this.fromGaze = { ...this.currentGaze };
     this.isSaccading = false;
     this.currentDamping = 0.040;
     this.transDamping = 0.035;
@@ -342,7 +456,7 @@ export class AutonomousGazeEngine extends EventTarget {
     this.autonomousSubMode = 'PROCEDURAL';
     this.activeAnimation = null;
 
-    // Schedule natural cadence with initial gentle hold on center (1100ms)
+    // Begin with a gentle side fixation: autonomous mode never holds eye contact.
     this.nextPOITime = now + 1100;
     this.nextBlinkTime = now + 1200 + Math.random() * 1500;
 
@@ -364,6 +478,11 @@ export class AutonomousGazeEngine extends EventTarget {
   }
 
   stopAudio() {
+    this.presetAudio.stop();
+    this.stopRecordedAudio();
+  }
+
+  stopRecordedAudio() {
     if (this.activeAudioSource) {
       try {
         this.activeAudioSource.stop();
@@ -387,13 +506,14 @@ export class AutonomousGazeEngine extends EventTarget {
   }
 
   startAnimationPlayback(anim, now) {
-    this.stopAudio();
+    this.stopRecordedAudio();
+    if (anim.hasAudio || anim.audioData || anim._audioBuffer) this.presetAudio.stop();
     this.ensureAudioContext();
 
     const delaySec = Math.max(0, Math.min(4.0, this.audioDelaySec ?? 2.2));
 
     // Start sub-millisecond audio playback via Web Audio API AudioBufferSourceNode with delay offset
-    if (anim._audioBuffer && this.audioCtx) {
+    if (anim._audioBuffer && this.audioCtx && !this.presetAudio.previewing) {
       try {
         const source = this.audioCtx.createBufferSource();
         source.buffer = anim._audioBuffer;
@@ -406,10 +526,10 @@ export class AutonomousGazeEngine extends EventTarget {
       } catch (e) {
         console.warn('[AutonomousGaze] Web Audio buffer playback error:', e);
       }
-    } else if (anim.hasAudio && anim.audioData) {
+    } else if (anim.hasAudio && anim.audioData && !this.presetAudio.previewing) {
       if (this.animLibrary) {
         this.animLibrary.decodeAudioBuffer(anim).then(buf => {
-          if (buf && this.activeAnimation === anim && this.audioCtx) {
+          if (buf && this.activeAnimation === anim && this.audioCtx && !this.presetAudio.previewing) {
             try {
               const source = this.audioCtx.createBufferSource();
               source.buffer = buf;
@@ -494,7 +614,7 @@ export class AutonomousGazeEngine extends EventTarget {
     this.animTransitionFrom = {
       head: {
         pitch: this.lastRenderedPitch || 0,
-        yaw: this.lastRenderedYaw || 0,
+        yaw: this.lastRenderedLandmarks ? this.lastRenderedYaw : this.currentHead.yaw,
         roll: this.lastRenderedRoll || 0
       },
       trans: {
@@ -506,7 +626,8 @@ export class AutonomousGazeEngine extends EventTarget {
         x: this.lastRenderedGazeX || 0,
         y: this.lastRenderedGazeY || 0
       },
-      landmarks: this.lastRenderedLandmarks ? this.lastRenderedLandmarks.map(p => ({ ...p })) : null
+      landmarks: this.lastRenderedLandmarks ? this.lastRenderedLandmarks.map(p => ({ ...p })) : null,
+      poseLandmarks: this.lastPoseLandmarks ? this.lastPoseLandmarks.map(p => ({ ...p })) : null
     };
 
     this.animEntryHead = { ...this.animTransitionFrom.head };
@@ -531,7 +652,7 @@ export class AutonomousGazeEngine extends EventTarget {
   }
 
   stopAnimationPlayback(now) {
-    this.stopAudio();
+    this.stopRecordedAudio();
     const finishedAnimName = this.lastPlayedAnimName;
     this.autonomousSubMode = 'PROCEDURAL';
     this.activeAnimation = null;
@@ -578,26 +699,27 @@ export class AutonomousGazeEngine extends EventTarget {
   scheduleNextPOI(now, immediate = false, initialDelay = null) {
     // Select a varied rhythm pattern prioritizing active environment exploration ("cherche quelque chose")
     this.consecutiveOffCenterLooks = this.consecutiveOffCenterLooks || 0;
-    const forceCenter = this.consecutiveOffCenterLooks >= 5;
+    const forceNearCenter = this.consecutiveOffCenterLooks >= 5;
     const rand = Math.random();
 
     let holdDurationMs;
     let angleX, angleY, coupledRoll;
     let transX = 0, transY = 0, transZ = 0;
 
-    if (forceCenter || rand < 0.14) {
-      // 1. CAMERA_CONTACT: Brief direct eye-contact with camera & viewer at center
-      this.currentRhythmMode = 'CAMERA_CONTACT';
+    if (forceNearCenter || rand < 0.14) {
+      // 1. SOFT_SIDE_GLANCE: Rest near center without ever making eye contact.
+      this.currentRhythmMode = 'SOFT_SIDE_GLANCE';
       this.consecutiveOffCenterLooks = 0;
       this.targetDamping = 0.038;
       this.transDamping = 0.032;
       holdDurationMs = 1200 + Math.random() * 900; // Shorter hold: alive and attentive!
       this.browPulseIntensity = 0.0035;
 
-      // Soft, front-facing head pose centered with viewer
-      angleX = (Math.random() - 0.5) * 6.0;
-      angleY = (Math.random() - 0.4) * 5.0;
-      coupledRoll = (Math.random() - 0.5) * 2.5;
+      const side = Math.random() > 0.5 ? 1 : -1;
+      // The face remains centered spatially, with a readable off-axis pose.
+      angleX = side * (7.0 + Math.random() * 5.0);
+      angleY = (Math.random() > 0.5 ? 1 : -1) * (3.0 + Math.random() * 4.0);
+      coupledRoll = -side * (1.5 + Math.random() * 2.0);
 
       // Moves gently near center, leans slightly in toward camera in depth
       transX = (Math.random() - 0.5) * 0.05;
@@ -605,8 +727,8 @@ export class AutonomousGazeEngine extends EventTarget {
       transZ = 0.04 + Math.random() * 0.05;
 
       this.targetGaze = {
-        x: (Math.random() - 0.5) * 0.08,
-        y: (Math.random() - 0.5) * 0.06
+        x: side * (0.15 + Math.random() * 0.08),
+        y: (Math.random() - 0.5) * 0.12
       };
 
       // Friendly subtle micro-smile and receptive expression
@@ -618,7 +740,7 @@ export class AutonomousGazeEngine extends EventTarget {
         browR: 0.08,
         pucker: 0.0
       };
-    } else if (rand < 0.42) {
+    } else if (rand < 0.40) {
       // 2. SEARCHING_WIDE: Actively scanning the room/environment ("cherche quelque chose")
       this.currentRhythmMode = 'SEARCHING_WIDE';
       this.consecutiveOffCenterLooks++;
@@ -653,7 +775,7 @@ export class AutonomousGazeEngine extends EventTarget {
         browR: 0.26 + Math.random() * 0.15,
         pucker: 0.0
       };
-    } else if (rand < 0.68) {
+    } else if (rand < 0.62) {
       // 3. INQUISITIVE_SCAN: Curious investigation, pronounced head tilt & asymmetric smirk
       this.currentRhythmMode = 'INQUISITIVE_SCAN';
       this.consecutiveOffCenterLooks++;
@@ -686,7 +808,7 @@ export class AutonomousGazeEngine extends EventTarget {
         browR: side > 0 ? (0.45 + Math.random() * 0.18) : 0.15,
         pucker: 0.0
       };
-    } else if (rand < 0.82) {
+    } else if (rand < 0.72) {
       // 4. DOUBLE_SACCADE: Quick micro-inspection / double-take
       this.currentRhythmMode = 'DOUBLE_SACCADE';
       this.consecutiveOffCenterLooks++;
@@ -719,7 +841,7 @@ export class AutonomousGazeEngine extends EventTarget {
         pucker: 0.0
       };
     } else if (rand < 0.92) {
-      // 5. UPWARD_THINKING: Searching above, ceiling or memory contemplation
+      // 5. UPWARD_THINKING: 20% of choices look above (twice the previous frequency).
       this.currentRhythmMode = 'UPWARD_THINKING';
       this.consecutiveOffCenterLooks++;
       this.targetDamping = 0.032;
@@ -728,7 +850,7 @@ export class AutonomousGazeEngine extends EventTarget {
       this.browPulseIntensity = 0.0065;
 
       angleX = (Math.random() - 0.5) * 30.0;
-      angleY = 16.0 + Math.random() * 16.0; // Look up (+16° to +32°!)
+      angleY = 16.0 + Math.random() * 16.0; // Upward intent: 16° to 32°.
       coupledRoll = (Math.random() - 0.5) * 8.0;
 
       transX = (Math.random() - 0.5) * 0.18;
@@ -759,7 +881,7 @@ export class AutonomousGazeEngine extends EventTarget {
       this.browPulseIntensity = 0.0050;
 
       angleX = (Math.random() - 0.5) * 32.0;
-      angleY = -14.0 - Math.random() * 12.0; // -14° to -26°
+      angleY = -14.0 - Math.random() * 12.0; // Downward intent: 14° to 26°.
       coupledRoll = -angleX * 0.14 + (Math.random() - 0.5) * 5.0;
 
       transX = (Math.random() - 0.5) * 0.16;
@@ -785,6 +907,8 @@ export class AutonomousGazeEngine extends EventTarget {
       holdDurationMs = initialDelay;
     }
 
+    this.targetGaze = this.keepGazeOffCamera(this.targetGaze);
+
     this.fromGaze = { ...this.currentGaze };
 
     // Fast ballistic saccade: 45ms - 75ms
@@ -797,16 +921,17 @@ export class AutonomousGazeEngine extends EventTarget {
 
     // Head target follows with dynamic scaling
     this.targetHead = {
-      pitch: angleY * 0.85,
+      // Landmarks use downward-positive Y; looking up requires a negative X rotation.
+      pitch: -angleY * 0.85,
       yaw: angleX * 0.90,
       roll: coupledRoll
     };
 
     // Head translation targets (normalized X, Y, and depth Z)
     this.targetTrans = {
-      x: transX,
-      y: transY,
-      z: transZ
+      x: transX * AUTONOMOUS_LATERAL_TRANSLATION_SCALE,
+      y: transY * AUTONOMOUS_LATERAL_TRANSLATION_SCALE,
+      z: transZ * AUTONOMOUS_DEPTH_TRANSLATION_SCALE
     };
 
     this.nextPOITime = now + holdDurationMs;
@@ -822,6 +947,7 @@ export class AutonomousGazeEngine extends EventTarget {
     const microDeltaY = (Math.random() - 0.4) * 0.16;
     this.targetGaze.x = Math.max(-0.35, Math.min(0.35, this.currentGaze.x + microDeltaX));
     this.targetGaze.y = Math.max(-0.32, Math.min(0.32, this.currentGaze.y + microDeltaY));
+    this.targetGaze = this.keepGazeOffCamera(this.targetGaze, Math.sign(this.currentGaze.x));
 
     this.saccadeStartTime = now;
     this.saccadeDuration = 40 + Math.random() * 25;
@@ -832,6 +958,15 @@ export class AutonomousGazeEngine extends EventTarget {
     // Settle for the remaining active searching period
     this.targetDamping = 0.038;
     this.nextPOITime = now + (1100 + Math.random() * 900);
+  }
+
+  keepGazeOffCamera(gaze, preferredSide = 0) {
+    const safe = { x: gaze?.x || 0, y: gaze?.y || 0 };
+    if (Math.hypot(safe.x, safe.y) < 0.14) {
+      const side = preferredSide || Math.sign(safe.x) || (Math.random() > 0.5 ? 1 : -1);
+      safe.x = side * Math.max(0.15, Math.abs(safe.x));
+    }
+    return safe;
   }
 
   /**
@@ -926,76 +1061,49 @@ export class AutonomousGazeEngine extends EventTarget {
   applyEyelidClosure(landmarks, blinkR = 0, blinkL = 0) {
     if (!landmarks || landmarks.length < 468) return;
 
-    // Right Eye Full Contour Closure
-    if (blinkR > 0.005) {
-      const bR = Math.min(1.0, blinkR);
-      const pairCount = Math.min(this.EYE_R_UPPER.length, this.EYE_R_LOWER.length);
+    const closeEye = (upper, lower, crease, rawBlink) => {
+      if (rawBlink <= 0.005) return;
+      const raw = Math.max(0, Math.min(1, rawBlink));
+      const blink = raw * raw * (3 - 2 * raw);
+      const pairCount = Math.min(upper.length, lower.length);
+      let maxFissureHeight = 0;
+
       for (let k = 0; k < pairCount; k++) {
-        const uIdx = this.EYE_R_UPPER[k];
-        const lIdx = this.EYE_R_LOWER[k];
-        const u = landmarks[uIdx];
-        const l = landmarks[lIdx];
+        const u = landmarks[upper[k]];
+        const l = landmarks[lower[k]];
         if (!u || !l) continue;
 
-        // Outer (0) and inner (8) canthi are anatomical hinges that pinch slightly,
-        // while the central eyelid margin (indices 2..6) moves fully.
-        const canthusWeight = (k === 0 || k === pairCount - 1) ? 0.22 : (k === 1 || k === pairCount - 2 ? 0.68 : 1.0);
-        const effB = bR * canthusWeight;
+        const gap = l.y - u.y;
+        maxFissureHeight = Math.max(maxFissureHeight, Math.abs(gap));
+        const hingeWeight = (k === 0 || k === pairCount - 1)
+          ? 0
+          : (k === 1 || k === pairCount - 2 ? 0.72 : 1);
+        const amount = blink * hingeWeight;
 
-        // Upper lid descends ~82% of fissure height, lower lid ascends ~18%
-        const fissureY = l.y * 0.82 + u.y * 0.18;
-        const fissureZ = Math.max(u.z || 0, l.z || 0);
-
-        u.y += (fissureY - u.y) * effB;
-        l.y += (fissureY - l.y) * (effB * 0.85);
+        // The upper lid performs most of the motion; the lower lid rises only
+        // slightly. Both meet on one continuous curved closure line.
+        const closureY = u.y + gap * 0.78;
+        u.y += (closureY - u.y) * amount;
+        l.y += (closureY - l.y) * amount;
 
         if (u.z !== undefined && l.z !== undefined) {
-          u.z += (fissureZ - u.z) * (effB * 0.50);
-          l.z += (fissureZ - l.z) * (effB * 0.50);
+          const closureZ = ((u.z || 0) + (l.z || 0)) * 0.5;
+          u.z += (closureZ - u.z) * amount * 0.22;
+          l.z += (closureZ - l.z) * amount * 0.22;
         }
       }
 
-      // Supratarsal crease / orbital socket skin fold descends naturally with the upper lid
-      const creaseDescent = bR * 0.012;
-      for (let c = 0; c < this.EYE_R_CREASE.length; c++) {
-        const pt = landmarks[this.EYE_R_CREASE[c]];
-        if (pt) pt.y += creaseDescent;
+      // Scale the fold movement to the person's actual eye opening instead of
+      // using a large fixed offset that can distort small faces.
+      const creaseDescent = maxFissureHeight * 0.32 * blink;
+      for (const index of crease) {
+        const point = landmarks[index];
+        if (point) point.y += creaseDescent;
       }
-    }
+    };
 
-    // Left Eye Full Contour Closure
-    if (blinkL > 0.005) {
-      const bL = Math.min(1.0, blinkL);
-      const pairCount = Math.min(this.EYE_L_UPPER.length, this.EYE_L_LOWER.length);
-      for (let k = 0; k < pairCount; k++) {
-        const uIdx = this.EYE_L_UPPER[k];
-        const lIdx = this.EYE_L_LOWER[k];
-        const u = landmarks[uIdx];
-        const l = landmarks[lIdx];
-        if (!u || !l) continue;
-
-        const canthusWeight = (k === 0 || k === pairCount - 1) ? 0.22 : (k === 1 || k === pairCount - 2 ? 0.68 : 1.0);
-        const effB = bL * canthusWeight;
-
-        const fissureY = l.y * 0.82 + u.y * 0.18;
-        const fissureZ = Math.max(u.z || 0, l.z || 0);
-
-        u.y += (fissureY - u.y) * effB;
-        l.y += (fissureY - l.y) * (effB * 0.85);
-
-        if (u.z !== undefined && l.z !== undefined) {
-          u.z += (fissureZ - u.z) * (effB * 0.50);
-          l.z += (fissureZ - l.z) * (effB * 0.50);
-        }
-      }
-
-      // Supratarsal crease
-      const creaseDescent = bL * 0.012;
-      for (let c = 0; c < this.EYE_L_CREASE.length; c++) {
-        const pt = landmarks[this.EYE_L_CREASE[c]];
-        if (pt) pt.y += creaseDescent;
-      }
-    }
+    closeEye(this.EYE_R_UPPER, this.EYE_R_LOWER, this.EYE_R_CREASE, blinkR);
+    closeEye(this.EYE_L_UPPER, this.EYE_L_LOWER, this.EYE_L_CREASE, blinkL);
   }
 
   /**
@@ -1014,103 +1122,45 @@ export class AutonomousGazeEngine extends EventTarget {
 
     const ar = renderW / Math.max(1, renderH);
 
-    // 1. Mouth Smile & Corners
-    const smileL = bs.mouthSmileLeft || 0;
-    const smileR = bs.mouthSmileRight || 0;
-    const avgSmile = (smileL + smileR) * 0.5;
-    const jawOpen = bs.jawOpen || 0;
-    const pucker = bs.mouthPucker || 0;
-    const funnel = bs.mouthFunnel || 0;
+    deformMouth(baseLandmarks, deformed, bs, ar, this.rigidSkull);
 
-    const leftCorner = [61, 76, 77, 78, 95];
-    for (let k = 0; k < leftCorner.length; k++) {
-      const idx = leftCorner[k];
-      if (deformed[idx]) {
-        deformed[idx].x -= (smileL * 0.038 * ar);
-        deformed[idx].y -= (smileL * 0.028);
+    // 3. Eyebrows: lift, lower and draw together, scaled to each eye's width.
+    const unit = value => Math.max(0, Math.min(1, value || 0));
+    const applyBrow = (indices, innerIdx, outerIdx, eyeInIdx, eyeOutIdx, outerUp, down) => {
+      const inner = baseLandmarks[innerIdx], outer = baseLandmarks[outerIdx];
+      const eyeIn = baseLandmarks[eyeInIdx], eyeOut = baseLandmarks[eyeOutIdx];
+      const nose = baseLandmarks[168];
+      if (!inner || !outer || !eyeIn || !eyeOut || !nose) return;
+      const eyeWidth = Math.hypot((eyeIn.x - eyeOut.x) * ar, eyeIn.y - eyeOut.y);
+      const dx = (inner.x - outer.x) * ar, dy = inner.y - outer.y;
+      const spanSq = dx * dx + dy * dy;
+      for (const idx of indices) {
+        const source = baseLandmarks[idx], point = deformed[idx];
+        if (!source || !point) continue;
+        const innerWeight = spanSq > 1e-10
+          ? unit(((source.x - outer.x) * ar * dx + (source.y - outer.y) * dy) / spanSq)
+          : 0.5;
+        const lift = Math.max(unit(bs.browInnerUp) * (0.35 + 0.65 * innerWeight), unit(outerUp) * (1.0 - 0.65 * innerWeight));
+        const frown = unit(down);
+        point.y += eyeWidth * (frown * (0.115 + 0.09 * innerWeight) - lift * 0.27);
+        point.x += (nose.x - source.x) * frown * (0.040 + 0.070 * innerWeight);
       }
-    }
-    const rightCorner = [291, 306, 307, 308, 324];
-    for (let k = 0; k < rightCorner.length; k++) {
-      const idx = rightCorner[k];
-      if (deformed[idx]) {
-        deformed[idx].x += (smileR * 0.038 * ar);
-        deformed[idx].y -= (smileR * 0.028);
-      }
-    }
+    };
+    applyBrow(this.EYEBROW_R, 55, 70, 133, 33, bs.browOuterUpRight, bs.browDownRight);
+    applyBrow(this.EYEBROW_L, 285, 300, 362, 263, bs.browOuterUpLeft, bs.browDownLeft);
 
-    // Lips & Cheeks smile lift
-    const lips = [0, 11, 12, 13, 14, 15, 16, 17, 37, 39, 40, 84, 85, 86, 87, 88, 267, 269, 270, 314, 315, 316, 317, 318];
-    for (let k = 0; k < lips.length; k++) {
-      const idx = lips[k];
-      if (deformed[idx]) {
-        deformed[idx].y -= avgSmile * 0.012;
+    // 4. Eyelids: surprise opens the eyes, concentration narrows them gently.
+    const widenEye = (upper, lower, wide) => {
+      for (let k = 1; k < upper.length - 1; k++) {
+        const u = deformed[upper[k]], l = deformed[lower[k]];
+        if (!u || !l) continue;
+        const gap = Math.max(0, l.y - u.y);
+        u.y -= gap * 0.225 * wide;
+        l.y += gap * 0.09 * wide;
       }
-    }
-
-    // 2. Jaw Drop & Open
-    if (jawOpen > 0.005) {
-      // Lower lip drops down with mouth aperture
-      const lowerLipIndices = [14, 15, 16, 17, 84, 85, 86, 87, 88, 91, 95, 146, 178, 179, 180, 181, 314, 315, 316, 317, 318, 321, 324, 375, 402, 403, 405];
-      for (let k = 0; k < lowerLipIndices.length; k++) {
-        const idx = lowerLipIndices[k];
-        if (deformed[idx]) {
-          deformed[idx].y += jawOpen * 0.065;
-        }
-      }
-      // Chin and mandibular jawline drop smoothly with physiological mandible rotation
-      const jawContour = [
-        { idx: 152, w: 1.0 }, // Chin center
-        { idx: 175, w: 0.95 }, { idx: 199, w: 0.95 }, { idx: 200, w: 0.95 }, { idx: 18, w: 0.9 },
-        { idx: 377, w: 0.85 }, { idx: 148, w: 0.85 },
-        { idx: 400, w: 0.70 }, { idx: 176, w: 0.70 },
-        { idx: 378, w: 0.50 }, { idx: 149, w: 0.50 }
-      ];
-      for (let k = 0; k < jawContour.length; k++) {
-        const { idx, w } = jawContour[k];
-        if (deformed[idx]) {
-          deformed[idx].y += jawOpen * 0.060 * w;
-        }
-      }
-    }
-
-    // 2b. Lip Funnel & Pucker
-    if (funnel > 0.01) {
-      const funnelOuter = [61, 291];
-      for (const idx of funnelOuter) {
-        if (deformed[idx]) deformed[idx].x *= 0.98;
-      }
-      for (const idx of [13, 14]) {
-        if (deformed[idx]) deformed[idx].y += (idx === 14 ? 0.02 : -0.02) * funnel;
-      }
-    }
-    if (pucker > 0.01) {
-      for (const idx of [61, 291]) {
-        if (deformed[idx]) deformed[idx].x += (idx === 61 ? 1 : -1) * pucker * 0.02 * ar;
-      }
-    }
-
-    // 3. Eyebrows
-    const browUpR = Math.max(bs.browOuterUpRight || 0, bs.browInnerUp || 0);
-    const browUpL = Math.max(bs.browOuterUpLeft || 0, bs.browInnerUp || 0);
-    if (browUpR > 0.005) {
-      this.EYEBROW_R.forEach(idx => {
-        if (deformed[idx]) deformed[idx].y -= browUpR * 0.016;
-      });
-    }
-    if (browUpL > 0.005) {
-      this.EYEBROW_L.forEach(idx => {
-        if (deformed[idx]) deformed[idx].y -= browUpL * 0.016;
-      });
-    }
-
-    // 4. Eyelids (Blink & Wink)
-    const blinkL = bs.eyeBlinkLeft || 0;
-    const blinkR = bs.eyeBlinkRight || 0;
-    if (blinkL > 0.005 || blinkR > 0.005) {
-      this.applyEyelidClosure(deformed, blinkR, blinkL);
-    }
-
+    };
+    widenEye(this.EYE_R_UPPER, this.EYE_R_LOWER, unit(bs.eyeWideRight) * (1 - unit(bs.eyeSquintRight)));
+    widenEye(this.EYE_L_UPPER, this.EYE_L_LOWER, unit(bs.eyeWideLeft) * (1 - unit(bs.eyeSquintLeft)));
     return deformed;
   }
 
@@ -1121,6 +1171,7 @@ export class AutonomousGazeEngine extends EventTarget {
     if (!this.baseLandmarks || this.baseLandmarks.length === 0) {
       return null;
     }
+    this.updatePresetAudioPlayback(now);
 
     const ar = renderW / Math.max(1, renderH);
     this.cranial.setAspectRatio(ar);
@@ -1128,46 +1179,45 @@ export class AutonomousGazeEngine extends EventTarget {
     // =========================================================================
     // 1. Point of Interest Scheduling & Procedural Rhythm State
     // =========================================================================
-    if (this.autonomousSubMode === 'PROCEDURAL') {
-      if (this.doubleSaccadePending && now >= this.doubleSaccadeTime) {
-        this.triggerSecondarySaccade(now);
-      } else if (now >= this.nextPOITime) {
-        this.scheduleNextPOI(now);
-      }
-
-      // Dynamic damping interpolation
-      this.currentDamping += (this.targetDamping - this.currentDamping) * 0.08;
-
-      // Ballistic Ocular Saccade Update
-      if (this.isSaccading) {
-        const saccadeElapsed = now - this.saccadeStartTime;
-        if (saccadeElapsed >= this.saccadeDuration) {
-          this.currentGaze = { ...this.targetGaze };
-          this.isSaccading = false;
-        } else {
-          const p = saccadeElapsed / this.saccadeDuration;
-          const snap = p * p * (3 - 2 * p);
-          this.currentGaze.x = this.fromGaze.x + (this.targetGaze.x - this.fromGaze.x) * snap;
-          this.currentGaze.y = this.fromGaze.y + (this.targetGaze.y - this.fromGaze.y) * snap;
-        }
-      } else {
-        // Fixation micro-drift during pause
-        const microX = Math.sin(now * 0.009) * 0.007;
-        const microY = Math.cos(now * 0.012) * 0.005;
-        this.currentGaze.x = this.targetGaze.x + microX;
-        this.currentGaze.y = this.targetGaze.y + microY;
-      }
-
-      // Smooth head movement with dynamic damping
-      this.currentHead.pitch += (this.targetHead.pitch - this.currentHead.pitch) * this.currentDamping;
-      this.currentHead.yaw += (this.targetHead.yaw - this.currentHead.yaw) * this.currentDamping;
-      this.currentHead.roll += (this.targetHead.roll - this.currentHead.roll) * this.currentDamping;
-
-      // Head Translation (X, Y, Depth Z) with smooth damping
-      this.currentTrans.x += (this.targetTrans.x - this.currentTrans.x) * this.transDamping;
-      this.currentTrans.y += (this.targetTrans.y - this.currentTrans.y) * this.transDamping;
-      this.currentTrans.z += (this.targetTrans.z - this.currentTrans.z) * this.transDamping;
+    // Continue exploring during presets as well as between performances.
+    if (this.doubleSaccadePending && now >= this.doubleSaccadeTime) {
+      this.triggerSecondarySaccade(now);
+    } else if (now >= this.nextPOITime) {
+      this.scheduleNextPOI(now);
     }
+
+    // Dynamic damping interpolation
+    this.currentDamping += (this.targetDamping - this.currentDamping) * 0.08;
+
+    // Ballistic Ocular Saccade Update
+    if (this.isSaccading) {
+      const saccadeElapsed = now - this.saccadeStartTime;
+      if (saccadeElapsed >= this.saccadeDuration) {
+        this.currentGaze = { ...this.targetGaze };
+        this.isSaccading = false;
+      } else {
+        const p = saccadeElapsed / this.saccadeDuration;
+        const snap = p * p * (3 - 2 * p);
+        this.currentGaze.x = this.fromGaze.x + (this.targetGaze.x - this.fromGaze.x) * snap;
+        this.currentGaze.y = this.fromGaze.y + (this.targetGaze.y - this.fromGaze.y) * snap;
+      }
+    } else {
+      // Fixation micro-drift during pause
+      const microX = Math.sin(now * 0.009) * 0.007;
+      const microY = Math.cos(now * 0.012) * 0.005;
+      this.currentGaze.x = this.targetGaze.x + microX;
+      this.currentGaze.y = this.targetGaze.y + microY;
+    }
+
+    // Smooth head movement with dynamic damping
+    this.currentHead.pitch += (this.targetHead.pitch - this.currentHead.pitch) * this.currentDamping;
+    this.currentHead.yaw += (this.targetHead.yaw - this.currentHead.yaw) * this.currentDamping;
+    this.currentHead.roll += (this.targetHead.roll - this.currentHead.roll) * this.currentDamping;
+
+    // Head Translation (X, Y, Depth Z) with smooth damping
+    this.currentTrans.x += (this.targetTrans.x - this.currentTrans.x) * this.transDamping;
+    this.currentTrans.y += (this.targetTrans.y - this.currentTrans.y) * this.transDamping;
+    this.currentTrans.z += (this.targetTrans.z - this.currentTrans.z) * this.transDamping;
 
     // Organic breathing cycle (~3.8s period)
     const breathCycle = now * 0.00165;
@@ -1213,12 +1263,13 @@ export class AutonomousGazeEngine extends EventTarget {
     const swayFade = (this.isTransitioningToAutonomous ? transT : 1.0) * procEase;
 
     const effPitch = this.currentHead.pitch + (breathPitch + rotWigglePitch) * swayFade;
-    const effYaw = this.currentHead.yaw + rotWiggleYaw * swayFade;
+    const effYaw = Math.max(-MAX_AUTONOMOUS_YAW,
+      Math.min(MAX_AUTONOMOUS_YAW, this.currentHead.yaw + rotWiggleYaw * swayFade));
     const effRoll = this.currentHead.roll + (breathRoll + rotWiggleRoll) * swayFade;
 
-    const effTransX = this.currentTrans.x + swayX * swayFade;
-    const effTransY = this.currentTrans.y + swayY * swayFade;
-    const effTransZ = this.currentTrans.z + swayZ * swayFade;
+    const effTransX = this.currentTrans.x + swayX * swayFade * AUTONOMOUS_LATERAL_TRANSLATION_SCALE;
+    const effTransY = this.currentTrans.y + swayY * swayFade * AUTONOMOUS_LATERAL_TRANSLATION_SCALE;
+    const effTransZ = this.currentTrans.z + swayZ * swayFade * AUTONOMOUS_DEPTH_TRANSLATION_SCALE;
 
     // Vestibulo-Ocular Reflex (VOR): Eyes compensate head movements
     const vorCompX = -(effYaw * 0.00075) - (effTransX * 0.70);
@@ -1241,8 +1292,14 @@ export class AutonomousGazeEngine extends EventTarget {
         this.nextBlinkTime = now + (isDoubleBlink ? 200 : (2600 + Math.random() * 3600));
       } else {
         const bProgress = bElapsed / this.blinkDuration;
-        blinkWeight = Math.sin(bProgress * Math.PI);
-        blinkWeight = Math.pow(blinkWeight, 1.3);
+        // Natural cadence: fast closure (~40%), slower reopening (~60%).
+        if (bProgress < 0.40) {
+          const t = bProgress / 0.40;
+          blinkWeight = t * t * (3 - 2 * t);
+        } else {
+          const t = (bProgress - 0.40) / 0.60;
+          blinkWeight = 1 - t * t * (3 - 2 * t);
+        }
       }
     }
 
@@ -1293,11 +1350,8 @@ export class AutonomousGazeEngine extends EventTarget {
 
     if (this.autonomousSubMode === 'RECORDED_ANIM' && this.activeAnimation) {
       const anim = this.activeAnimation;
-      let elapsed = now - this.animStartTime;
-
-      const delayMs = (this.audioDelaySec ?? 2.2) * 1000.0;
-      const audioDurationMs = anim._audioBuffer ? (anim._audioBuffer.duration * 1000.0) : 0;
-      const effectiveDuration = Math.max(anim.durationMs, delayMs + audioDurationMs);
+      const elapsed = this.getAnimationElapsed(now);
+      const effectiveDuration = this.getAnimationDuration(anim);
       const fadeDuration = this.animFadeDuration;
       const totalBlockDuration = effectiveDuration + fadeDuration;
 
@@ -1325,12 +1379,18 @@ export class AutonomousGazeEngine extends EventTarget {
       }
     }
 
+    const animationPoseBlendshapes = animSample?.blendshapes;
+    const audioMouth = this.presetAudio.getBlendshapes();
+    if (audioMouth && animSample) {
+      animSample = { ...animSample, blendshapes: { ...animSample.blendshapes, ...audioMouth } };
+    }
+
     // =========================================================================
     // 3. Pose & Deformations Synthesis (Centered Mask, Faithful Acting, Contour Protection)
     // =========================================================================
-    let targetPitch = 0;
-    let targetYaw = 0;
-    let targetRoll = 0;
+    let targetPitch = effPitch;
+    let targetYaw = effYaw;
+    let targetRoll = effRoll;
     let targetTransX = 0;
     let targetTransY = 0;
     let targetTransZ = 0;
@@ -1341,6 +1401,9 @@ export class AutonomousGazeEngine extends EventTarget {
       const anim = this.activeAnimation;
       const baseline = anim?._baselineHeadPose || { pitch: 0, yaw: 0, roll: 0, x: 0, y: 0, z: 0 };
       const curPose = animSample.headPose;
+      targetPitch = 0;
+      targetYaw = 0;
+      targetRoll = 0;
 
       if (curPose) {
         // Faithful head rotation centered around performer's baseline
@@ -1352,9 +1415,9 @@ export class AutonomousGazeEngine extends EventTarget {
         targetTransX = ((curPose.x || 0) - (baseline.x || 0)) * 0.022;
         targetTransY = ((curPose.y || 0) - (baseline.y || 0)) * 0.022;
         targetTransZ = ((curPose.z || 0) - (baseline.z || 0)) * 0.022;
-      } else if (animSample.blendshapes) {
+      } else if (animationPoseBlendshapes) {
         // Natural speech gesture fallback
-        const bs = animSample.blendshapes;
+        const bs = animationPoseBlendshapes;
         const jaw = bs.jawOpen || 0;
         const brow = bs.browInnerUp || 0;
         const smileDiff = (bs.mouthSmileRight || 0) - (bs.mouthSmileLeft || 0);
@@ -1365,13 +1428,13 @@ export class AutonomousGazeEngine extends EventTarget {
         targetTransY = -jaw * 0.012;
       }
 
-      // Safe anatomical bounds
-      targetPitch = Math.max(-35, Math.min(35, targetPitch));
-      targetYaw = Math.max(-42, Math.min(42, targetYaw));
-      targetRoll = Math.max(-28, Math.min(28, targetRoll));
-      targetTransX = Math.max(-0.12, Math.min(0.12, targetTransX));
-      targetTransY = Math.max(-0.12, Math.min(0.12, targetTransY));
-      targetTransZ = Math.max(-0.12, Math.min(0.12, targetTransZ));
+      // Play gestures on top of the moving autonomous pose, within safe bounds.
+      targetPitch = Math.max(-35, Math.min(35, effPitch + targetPitch));
+      targetYaw = Math.max(-MAX_AUTONOMOUS_YAW, Math.min(MAX_AUTONOMOUS_YAW, effYaw + targetYaw));
+      targetRoll = Math.max(-28, Math.min(28, effRoll + targetRoll));
+      targetTransX = Math.max(-0.12, Math.min(0.12, targetTransX)) * AUTONOMOUS_LATERAL_TRANSLATION_SCALE;
+      targetTransY = Math.max(-0.12, Math.min(0.12, targetTransY)) * AUTONOMOUS_LATERAL_TRANSLATION_SCALE;
+      targetTransZ = Math.max(-0.12, Math.min(0.12, targetTransZ)) * AUTONOMOUS_DEPTH_TRANSLATION_SCALE;
 
       // Deform facial vertices:
       // Anatomical Expression Retargeting with 1:1 Real Performance Fidelity
@@ -1484,10 +1547,16 @@ export class AutonomousGazeEngine extends EventTarget {
         }
       }
 
+      if (audioMouth && animBaseLandmarks && animSample.localCoords) {
+        animBaseLandmarks = this.applyBlendshapesToLandmarks(animBaseLandmarks, audioMouth, renderW, renderH);
+      }
+
       // Fallback for preset animations or clips without localCoords: apply blendshapes directly to baseLandmarks
       if (!animBaseLandmarks && animSample.blendshapes) {
         animBaseLandmarks = this.applyBlendshapesToLandmarks(this.baseLandmarks, animSample.blendshapes, renderW, renderH);
       }
+      this.amplifyPresetExpressions(this.baseLandmarks, animBaseLandmarks,
+        !!audioMouth || !!this.activeAnimation?.hasAudio);
     }
 
     // Smooth interpolation of procedural expressions
@@ -1523,6 +1592,7 @@ export class AutonomousGazeEngine extends EventTarget {
       mouthSmileRight: this.currentProceduralExpressions.smileR,
       mouthPucker: this.currentProceduralExpressions.pucker
     };
+    if (audioMouth) Object.assign(proceduralBlendshapes, audioMouth);
 
     const procWeight = 1.0 - animBlendWeight;
 
@@ -1551,10 +1621,8 @@ export class AutonomousGazeEngine extends EventTarget {
 
     if (this.autonomousSubMode === 'RECORDED_ANIM' && this.activeAnimation) {
       const anim = this.activeAnimation;
-      const elapsed = now - this.animStartTime;
-      const delayMs = (this.audioDelaySec ?? 2.2) * 1000.0;
-      const audioDurationMs = anim._audioBuffer ? (anim._audioBuffer.duration * 1000.0) : 0;
-      const effectiveDuration = Math.max(anim.durationMs, delayMs + audioDurationMs);
+      const elapsed = this.getAnimationElapsed(now);
+      const effectiveDuration = this.getAnimationDuration(anim);
       const fadeDuration = this.animFadeDuration;
 
       if (elapsed < fadeDuration) {
@@ -1579,24 +1647,20 @@ export class AutonomousGazeEngine extends EventTarget {
         finalTransY = targetTransY;
         finalTransZ = targetTransZ;
       } else {
-        // Fading out: gently return from ending performance pose towards center (0, 0, 0)
+        // Rejoin the ongoing exploration instead of returning to a fixed angle.
         const fadeOutElapsed = elapsed - effectiveDuration;
         const rawExit = Math.max(0, Math.min(1, fadeOutElapsed / fadeDuration));
         const exitW = rawExit * rawExit * rawExit * (rawExit * (rawExit * 6 - 15) + 10);
         const animHoldW = 1.0 - exitW;
 
-        finalPitch = targetPitch * animHoldW;
-        finalYaw = targetYaw * animHoldW;
-        finalRoll = targetRoll * animHoldW;
-        finalTransX = targetTransX * animHoldW;
-        finalTransY = targetTransY * animHoldW;
-        finalTransZ = targetTransZ * animHoldW;
+        finalPitch = targetPitch * animHoldW + effPitch * exitW;
+        finalYaw = targetYaw * animHoldW + effYaw * exitW;
+        finalRoll = targetRoll * animHoldW + effRoll * exitW;
+        finalTransX = targetTransX * animHoldW + effTransX * exitW;
+        finalTransY = targetTransY * animHoldW + effTransY * exitW;
+        finalTransZ = targetTransZ * animHoldW + effTransZ * exitW;
       }
 
-      this.currentHead = { pitch: finalPitch, yaw: finalYaw, roll: finalRoll };
-      this.targetHead = { ...this.currentHead };
-      this.currentTrans = { x: finalTransX, y: finalTransY, z: finalTransZ };
-      this.targetTrans = { ...this.currentTrans };
     } else {
       finalPitch = effPitch;
       finalYaw = effYaw;
@@ -1609,7 +1673,15 @@ export class AutonomousGazeEngine extends EventTarget {
     // 4. Deform 3D Landmarks around Head Anchor (Sellion / Nose Root landmark 168)
     const len = this.baseLandmarks.length;
     const morphedLandmarks = new Array(len);
-    const anchor = this.baseLandmarks[168] || this.baseLandmarks[1] || { x: 0.5, y: 0.5, z: 0 };
+    // Use the deformed nose root as pivot so recorded expressions cannot shift the face.
+    const baseAnchor = this.baseLandmarks[168] || this.baseLandmarks[1] || { x: 0.5, y: 0.5, z: 0 };
+    const procAnchor = procBaseLandmarks?.[168] || baseAnchor;
+    const animAnchor = animBaseLandmarks?.[168] || baseAnchor;
+    const anchor = animBaseLandmarks && animBlendWeight > 0.001 ? {
+      x: procAnchor.x * (1.0 - animBlendWeight) + animAnchor.x * animBlendWeight,
+      y: procAnchor.y * (1.0 - animBlendWeight) + animAnchor.y * animBlendWeight,
+      z: (procAnchor.z || 0) * (1.0 - animBlendWeight) + (animAnchor.z || 0) * animBlendWeight
+    } : procAnchor;
 
     const center = {
       x: 0.5 + finalTransX * mirrorSign,
@@ -1633,12 +1705,16 @@ export class AutonomousGazeEngine extends EventTarget {
     // Tuned ocular shift: natural subtle gaze that keeps pupils visible in the eye sockets
     const baseGazeAmpX = 0.020 * gazeScaleX;
     const baseGazeAmpY = 0.015;
-    const eyeShiftX = compensatedGazeX * baseGazeAmpX * mirrorSign * procWeight;
-    const eyeShiftY = compensatedGazeY * baseGazeAmpY * procWeight;
+    // Keep a visible off-camera fixation during presets too. Recorded animation
+    // blendshapes may be frontal, but autonomous mode never holds direct gaze.
+    const autonomousGazeWeight = 1.0 - animBlendWeight * 0.35;
+    const eyeShiftX = compensatedGazeX * baseGazeAmpX * mirrorSign * autonomousGazeWeight;
+    const eyeShiftY = compensatedGazeY * baseGazeAmpY * autonomousGazeWeight;
 
     // Eyelid articulation weights from finalBlendshapes
-    const curBlinkR = finalBlendshapes.eyeBlinkRight || 0;
-    const curBlinkL = finalBlendshapes.eyeBlinkLeft || 0;
+    const squintGain = 1 + (this.presetExpressionIntensity - 1) * animBlendWeight * 0.8;
+    const curBlinkR = Math.min(1, Math.max(finalBlendshapes.eyeBlinkRight || 0, (finalBlendshapes.eyeSquintRight || 0) * 0.30 * squintGain));
+    const curBlinkL = Math.min(1, Math.max(finalBlendshapes.eyeBlinkLeft || 0, (finalBlendshapes.eyeSquintLeft || 0) * 0.30 * squintGain));
 
     // Perspective depth scaling: face expands realistically when moving closer, contracts when moving back
     const zDepthScale = Math.max(0.65, Math.min(1.45, 1.0 + finalTransZ * 1.8));
@@ -1669,8 +1745,8 @@ export class AutonomousGazeEngine extends EventTarget {
       let outY = center.y + (this.rotVec.y * zDepthScale);
       let outZ = center.z + (this.rotVec.z / ar);
 
-      // Apply ocular gaze shift to iris landmarks (468 to 477) during procedural wander
-      if (i >= 468 && i <= 477 && procWeight > 0.001) {
+      // Apply ocular gaze shift to iris landmarks in every autonomous sub-mode.
+      if (i >= 468 && i <= 477) {
         outX += eyeShiftX;
         outY -= eyeShiftY;
       }
@@ -1700,11 +1776,15 @@ export class AutonomousGazeEngine extends EventTarget {
 
     // Apply vertex-level quintic interpolation during entrance into recorded animation
     let outputLandmarks = morphedLandmarks;
+    let poseFrom = null;
+    let poseWeight = 1;
     if (this.autonomousSubMode === 'RECORDED_ANIM' && this.animTransitionFrom?.landmarks) {
-      const elapsed = now - this.animStartTime;
+      const elapsed = this.getAnimationElapsed(now);
       if (elapsed < this.animFadeDuration) {
         const rawT = Math.max(0, Math.min(1, elapsed / this.animFadeDuration));
         const wAnim = rawT * rawT * rawT * (rawT * (rawT * 6 - 15) + 10);
+        poseFrom = this.animTransitionFrom.poseLandmarks || this.animTransitionFrom.landmarks;
+        poseWeight = wAnim;
         const invW = 1.0 - wAnim;
         const fromLms = this.animTransitionFrom.landmarks;
         const blended = new Array(len);
@@ -1721,10 +1801,15 @@ export class AutonomousGazeEngine extends EventTarget {
         outputLandmarks = blended;
       }
     } else if (this.isTransitioningToAutonomous && this.transFromLandmarks && transT < 1.0) {
+      poseFrom = this.transFromLandmarks;
+      poseWeight = transT;
       const invT = 1.0 - transT;
       const blended = new Array(len);
       for (let i = 0; i < len; i++) {
-        const fromPt = this.transFromLandmarks[i] || morphedLandmarks[i];
+        // Do not inherit a frontal live fixation when autonomous mode begins.
+        const fromPt = (i >= 468 && i <= 477)
+          ? morphedLandmarks[i]
+          : (this.transFromLandmarks[i] || morphedLandmarks[i]);
         const toPt = morphedLandmarks[i];
         blended[i] = {
           x: fromPt.x * invT + toPt.x * transT,
@@ -1734,6 +1819,27 @@ export class AutonomousGazeEngine extends EventTarget {
         };
       }
       outputLandmarks = blended;
+    }
+
+    // Fit the bust and mesh alignment to the rigid head, independently of speech
+    // and expressions (in particular the moving chin and eyelids).
+    const poseLandmarks = new Array(len);
+    for (const i of HEAD_POSE_INDICES) {
+      const src = this.baseLandmarks[i];
+      if (!src) continue;
+      this.rotVec.set((src.x - baseAnchor.x) * ar, src.y - baseAnchor.y, ((src.z || 0) - (baseAnchor.z || 0)) * ar);
+      this.rotVec.applyMatrix4(this.matrixHelper);
+      const toPt = {
+        x: center.x + this.rotVec.x * zDepthScale / ar,
+        y: center.y + this.rotVec.y * zDepthScale,
+        z: center.z + this.rotVec.z / ar
+      };
+      const fromPt = poseFrom?.[i] || toPt;
+      poseLandmarks[i] = {
+        x: fromPt.x * (1 - poseWeight) + toPt.x * poseWeight,
+        y: fromPt.y * (1 - poseWeight) + toPt.y * poseWeight,
+        z: (fromPt.z || 0) * (1 - poseWeight) + toPt.z * poseWeight
+      };
     }
 
     // Cache exact rendered state for continuous next-frame transitions
@@ -1746,6 +1852,7 @@ export class AutonomousGazeEngine extends EventTarget {
     this.lastRenderedGazeX = compensatedGazeX;
     this.lastRenderedGazeY = compensatedGazeY;
     this.lastRenderedLandmarks = outputLandmarks;
+    this.lastPoseLandmarks = poseLandmarks;
 
     const effHeadPose = {
       pitch: finalPitch,
@@ -1764,12 +1871,14 @@ export class AutonomousGazeEngine extends EventTarget {
     return {
       detected: true,
       isAutonomous: true,
+      autonomousBlendWeight: transT,
       subMode: this.autonomousSubMode,
       activeAnimationName: this.activeAnimation ? this.activeAnimation.name : null,
       animBlendWeight,
       timestamp: now,
       latencyMs: 0,
       landmarks: outputLandmarks,
+      poseLandmarks,
       liveLandmarks: this.baseLandmarks, // Points to base memory for UV mapping
       headPose: effHeadPose,
       blendshapes: finalBlendshapes

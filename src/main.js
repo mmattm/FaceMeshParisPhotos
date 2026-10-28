@@ -1,7 +1,7 @@
 /**
  * Photomaton FaceMesh // Pure Facial Expression Motion Capture & Head Pose Retargeter
  * 
- * High-precision recording of live facial expressions with complete 6-DoF rigid head movement
+ * Live facial expression tracking with complete 6-DoF rigid head movement
  * compensation, zero-jump seamless cyclical looping, and direct application onto the live 3D head.
  */
 
@@ -10,13 +10,14 @@ import { FaceTracker } from './core/tracker.js';
 import { FaceMeshRenderer } from './core/renderer.js';
 import { ExpressionLooper } from './mocap/expressionLooper.js';
 import { AutoCalibrator } from './mocap/autoCalibrator.js';
-import { AudioLooper } from './audio/audioLooper.js';
-import { VideoPerformanceExtractor } from './video/videoPerformanceExtractor.js';
 import { AutonomousGazeEngine } from './core/autonomousGazeEngine.js';
 import { FaceTextureHistoryBuffer } from './core/faceTextureHistoryBuffer.js';
 import { AnimationLibrary } from './core/animationLibrary.js';
 import { VisitorDetector } from './core/visitorDetector.js';
 import { CanvasBroadcaster } from './webrtc/canvasBroadcaster.js';
+import { MotionPresetRecorder } from './mocap/motionPresetRecorder.js';
+import { setupFaceMeshAlignmentControls } from './ui/faceMeshAlignmentControls.js';
+import { AudioLibraryControls } from './ui/audioLibraryControls.js';
 
 class App {
   constructor() {
@@ -31,34 +32,52 @@ class App {
     this.renderer = new FaceMeshRenderer(this.canvasEl, this.videoEl);
     this.looper = new ExpressionLooper();
     this.autoCalibrator = new AutoCalibrator(this.looper);
-    this.audioLooper = new AudioLooper();
-    this.videoExtractor = new VideoPerformanceExtractor({ fps: 30, maxDuration: 40.0 });
     this.autonomousEngine = new AutonomousGazeEngine();
     this.historyBuffer = new FaceTextureHistoryBuffer(24, 150); // Cleanest frontal face capture tracker
     this.historyBuffer.addEventListener('pristine-capture', (e) => this.handlePristineCapture(e.detail));
+    this.historyBuffer.addEventListener('fallback-capture', () => {
+      this.showNotification('Cliché FaceMesh de secours mémorisé', 'success', 5000, 'facemesh-capture');
+      this.handleVisitorSnapshotReady();
+    });
     this.animLibrary = new AnimationLibrary();
     this.autonomousEngine.setAnimationLibrary(this.animLibrary);
+    const savedVisitorSens = typeof localStorage !== 'undefined' ? localStorage.getItem('photomaton_visitor_sensitivity') : null;
+    const initialVisitorSens = savedVisitorSens !== null ? Number(savedVisitorSens) : 50;
     this.visitorDetector = new VisitorDetector({
-      threshold: 0.20,
-      morphThreshold: 0.16,
-      minAbsenceMs: 1500,
-      longAbsenceMs: 20000
+      sensitivity: initialVisitorSens
     });
     this.visitorDetector.addEventListener('new-visitor', (e) => this.handleNewVisitor(e.detail));
-    this.canvasBroadcaster = new CanvasBroadcaster(this.canvasEl);
-    this.isProcessingVideo = false;
+    this.canvasBroadcaster = new CanvasBroadcaster(this.canvasEl, {
+      videoElement: this.videoEl,
+      mirrored: true,
+      width: 1080,
+      height: 1080
+    });
+    this.canvasBroadcaster.mountPreview(document.getElementById('webrtc-preview-slot'));
+    this.presetRecorder = new MotionPresetRecorder({ fps: 30, maxDurationMs: 30000 });
+    this.isSavingPresetRecording = false;
+    this.bustModeEnabled = false;
+    this.bustModeRequested = false;
+    this.minimalistMode = false;
+    this.notificationEntries = new Map();
+    this.currentVisitorId = null;
+    this.hasVisitorSnapshot = false;
+    this.comfyVisitorTimer = null;
+    this.comfyVisitorPending = false;
+    this.comfyVisitorReadyAt = 0;
+    this.comfyCallId = 0;
+    this.presetAudioLoading = false;
+    this.comfySettings = {
+      enabled: localStorage.getItem('photomaton_comfy_enabled') === 'true',
+      baseUrl: localStorage.getItem('photomaton_comfy_base_url') || 'http://127.0.0.1:8188',
+      workflowFilename: localStorage.getItem('photomaton_comfy_workflow') || ''
+    };
 
     // Presence & State Machine
     this.appState = 'WAITING'; // 'WAITING', 'LIVE', 'NEW_PERSON', 'AUTONOMOUS'
     this.lastFaceDetectedTime = 0;
     this.consecutiveDetectedFrames = 0;
-    this.hasTakenSnapshotForVisitor = false;
-    this.lastSnapshotTimestamp = 0;
-    this.autoSnapshotEnabled = true;
     this.forceAutonomousMode = false;
-    this.recentSnapshots = [];
-    this.latestSnapshot = null;
-    this.toastTimeout = null;
 
     // Last known tracking frames for seamless handoff
     this.lastTrackingLandmarks = null;
@@ -81,7 +100,7 @@ class App {
     this.currentFps = 60;
     this.rafId = null;
 
-    // Defaults: Mirror ON, 1€ Smoothing ON on tracker, Webcam ON, Face Texture ON
+    // Mirror is permanently enabled; smoothing, webcam and texture are ON.
     this.isMirrored = true;
     this.showWebcam = true;
 
@@ -108,18 +127,11 @@ class App {
         console.warn('Animation Library init warning:', animErr);
       }
 
-      // Unlock Web Audio context on first user interaction for zero-latency lip sync
-      const unlockAudio = async () => {
-        try {
-          const audioCtx = await this.audioLooper.ensureAudioContext();
-          if (audioCtx) {
-            this.autonomousEngine.setAudioContext(audioCtx);
-            this.animLibrary.setAudioContext(audioCtx);
-          }
-        } catch (e) {}
-      };
-      window.addEventListener('click', unlockAudio, { once: true });
-      window.addEventListener('touchstart', unlockAudio, { once: true });
+      try {
+        await this.audioLibrary.refresh();
+      } catch (error) {
+        this.audioLibrary.report(error);
+      }
 
       // 2. Start Camera (720p 60fps)
       if (this.loadingText) this.loadingText.textContent = 'Starting camera stream...';
@@ -142,9 +154,9 @@ class App {
         }
       }
 
-      // 3. Handle Canvas Dimensions
+      // 3. Initialize the fixed Full HD render surface once. Its CSS display
+      // adapts to the operator window without changing the WebRTC composition.
       this.handleResize();
-      window.addEventListener('resize', () => this.handleResize());
 
       // 4. Hide Loading Overlay if camera started
       if (this.camera.isStreaming && this.loadingOverlay) {
@@ -166,10 +178,7 @@ class App {
   }
 
   handleResize() {
-    const stage = document.getElementById('stage-container');
-    const width = stage.clientWidth;
-    const height = stage.clientHeight;
-    this.renderer.resize(width, height);
+    this.renderer.resize(1920, 1080, 1);
   }
 
   setupEventListeners() {
@@ -177,33 +186,42 @@ class App {
     this.showWebcam = true;
     document.body.classList.add('show-webcam', 'show-texture');
 
-
-
-    // 3. Mirror Toggle Button
-    const btnMirror = document.getElementById('btn-toggle-mirror');
-    btnMirror.addEventListener('click', () => {
-      this.isMirrored = !this.isMirrored;
-      btnMirror.classList.toggle('active', this.isMirrored);
-      this.renderer.setMirrored(this.isMirrored);
-      this.autonomousEngine.setMirrored(this.isMirrored);
+    document.getElementById('btn-copy-visitor-id')?.addEventListener('click', async () => {
+      if (!this.currentVisitorId) return;
+      const visitorId = this.currentVisitorId;
+      try {
+        await navigator.clipboard.writeText(visitorId);
+        this.showNotification(`ID visiteur copié · ${visitorId.slice(0, 8)}`, 'success', 2200, 'visitor-id');
+      } catch {
+        window.prompt('ID du visiteur actuel — copier :', visitorId);
+      }
     });
 
-    // 3b. Autonomous Mode Toggle Button
+    // 3. Autonomous Mode Toggle Button
     const btnAutonomous = document.getElementById('btn-toggle-autonomous');
     btnAutonomous?.addEventListener('click', () => {
+      if (this.presetRecorder.isRecording) {
+        alert("Arrêtez d'abord l'enregistrement du preset.");
+        return;
+      }
       this.forceAutonomousMode = !this.forceAutonomousMode;
       btnAutonomous.classList.toggle('active', this.forceAutonomousMode);
       if (this.forceAutonomousMode) {
-        if (this.autonomousEngine.hasSeenFace) {
+        if (this.canUseAutonomous()) {
+          if (!this.applyBestTextureReference(performance.now())) {
+            this.forceAutonomousMode = false;
+            btnAutonomous.classList.remove('active');
+            this.showNotification('Placez le visage de face, sans l’incliner, pour mémoriser le cliché.');
+            return;
+          }
           this.setState('AUTONOMOUS');
-          this.applyBestTextureReference(performance.now());
           this.autonomousEngine.startAutonomous(
             performance.now(),
             this.lastTrackingLandmarks,
             this.lastTrackingHeadPose
           );
         } else {
-          alert('Veuillez vous placer devant la caméra une première fois pour initialiser le masque.');
+          this.showNotification('Un cliché FaceMesh mémorisé est nécessaire pour activer le mode autonome.');
           this.forceAutonomousMode = false;
           btnAutonomous.classList.remove('active');
         }
@@ -224,23 +242,23 @@ class App {
       }
     });
 
-    // 3c. Auto-Snapshot Toggle Button (Default: ON)
-    const btnAutoSnapshot = document.getElementById('btn-toggle-auto-snapshot');
-    btnAutoSnapshot?.addEventListener('click', () => {
-      this.autoSnapshotEnabled = !this.autoSnapshotEnabled;
-      btnAutoSnapshot.classList.toggle('active', this.autoSnapshotEnabled);
+    // 3b. Manual override for the bust, enabled automatically in autonomous mode.
+    const btnBust = document.getElementById('btn-toggle-bust');
+    this.renderer.setBustModel('male_facemesh_zone_creusee');
+
+    btnBust?.addEventListener('click', () => {
+      this.setBustMode(!this.renderer.showBust, true);
     });
 
-    // 3d. Snapshot Toast Actions (Download & Close)
-    const btnDownloadToast = document.getElementById('btn-download-toast-snapshot');
-    btnDownloadToast?.addEventListener('click', () => {
-      if (this.latestSnapshot) {
-        this.downloadSnapshot(this.latestSnapshot.dataUrl, `webcam_visiteur_${Date.now()}.jpg`);
-      }
+    document.getElementById('btn-toggle-minimalist')?.addEventListener('click', () => {
+      this.setMinimalistMode(!this.minimalistMode);
     });
-    const btnCloseToast = document.getElementById('btn-close-toast-snapshot');
-    btnCloseToast?.addEventListener('click', () => {
-      document.getElementById('snapshot-toast')?.classList.add('hidden');
+
+    document.getElementById('btn-debug-new-visitor')?.addEventListener('click', () => {
+      // Let live tracking collect a fresh visitor image during the test.
+      if (this.forceAutonomousMode) btnAutonomous?.click();
+      this.handleNewVisitor({ reason: 'DEBUG_TRIGGER' });
+      this.showNotification('Nouveau visiteur simulé', '', 2200, 'visitor-debug');
     });
 
     // 4. Neutral Baseline Calibration Button & Visual Toast
@@ -289,13 +307,7 @@ class App {
       });
     }
 
-    // 5. Snapshot Button
-    const btnSnapshot = document.getElementById('btn-snapshot');
-    if (btnSnapshot) {
-      btnSnapshot.addEventListener('click', () => this.captureSnapshot());
-    }
-
-    // 5a. Fullscreen Button
+    // 5. Fullscreen Button
     const btnFullscreen = document.getElementById('btn-fullscreen');
     if (btnFullscreen) {
       btnFullscreen.addEventListener('click', () => {
@@ -325,329 +337,109 @@ class App {
       });
     }
 
-    // 6. Webcam Expression Looper Controls
-    const btnRecord = document.getElementById('btn-record-clip');
-    const recLabel = document.getElementById('rec-label');
-    const btnToggleLoop = document.getElementById('btn-toggle-loop');
-    const loopBtnIcon = document.getElementById('loop-btn-icon');
-    const loopLabel = document.getElementById('loop-label');
-    const btnClearLoop = document.getElementById('btn-clear-loop');
-    const btnSaveAnim = document.getElementById('btn-save-anim');
-    const btnOpenAnimLibrary = document.getElementById('btn-open-anim-library');
-    const sliderBlend = document.getElementById('slider-blend') || document.getElementById('slider-smooth');
-    const blendValLabel = document.getElementById('blend-val-label') || document.getElementById('smooth-val-label');
-    const sliderBoost = document.getElementById('slider-boost');
-    const boostValLabel = document.getElementById('boost-val-label');
-    const sliderEyeBlend = document.getElementById('slider-eye-blend');
-    const eyeBlendValLabel = document.getElementById('eye-blend-val-label');
-    const sliderContour = document.getElementById('slider-contour');
-    const contourValLabel = document.getElementById('contour-val-label');
-    const sliderAntiShake = document.getElementById('slider-anti-shake');
-    const antiShakeValLabel = document.getElementById('anti-shake-val-label');
-    const sliderAnimAudioDelay = document.getElementById('slider-anim-audio-delay');
-    const animAudioDelayValLabel = document.getElementById('anim-audio-delay-val-label');
-    const appStateLabel = document.getElementById('app-state-label');
-    const timelineTrack = document.getElementById('timeline-track');
-
-    // Initialize Expression Blend slider (Default: 0% = pure recorded animation)
-    if (sliderBlend) {
-      sliderBlend.value = '0';
-      this.looper.setExpressionBlend(0.0);
-      sliderBlend.addEventListener('input', (e) => {
+    // 6. Visitor Detection Sensitivity (Range: 10% to 100%, Default: 50%)
+    const sliderVisitorSens = document.getElementById('slider-visitor-sensitivity');
+    const visitorSensValLabel = document.getElementById('visitor-sensitivity-val-label');
+    const currentSens = this.visitorDetector?.getSensitivity?.() || 50;
+    if (sliderVisitorSens) {
+      sliderVisitorSens.value = String(currentSens);
+      if (visitorSensValLabel) visitorSensValLabel.textContent = `${currentSens}%`;
+      sliderVisitorSens.addEventListener('input', (e) => {
         const val = parseInt(e.target.value, 10);
-        this.looper.setExpressionBlend(val / 100.0);
-        if (blendValLabel) blendValLabel.textContent = `${val}%`;
-      });
-    }
-
-    // Initialize Expression Boost Slider (Default: 50% = 1.5x boost)
-    if (sliderBoost) {
-      sliderBoost.value = '50';
-      this.looper.setExpressionBoost(0.5);
-      if (boostValLabel) boostValLabel.textContent = '50%';
-      sliderBoost.addEventListener('input', (e) => {
-        const val = parseInt(e.target.value, 10);
-        this.looper.setExpressionBoost(val / 100.0);
-        if (boostValLabel) boostValLabel.textContent = `${val}%`;
-      });
-    }
-
-    // Initialize Eye Animation Blend (Default: 0% = 100% Live Eyes, 100% = 100% Recorded Eyes)
-    this.looper.setEyeBlend(0.0);
-    if (sliderEyeBlend) {
-      sliderEyeBlend.value = '0';
-      if (eyeBlendValLabel) eyeBlendValLabel.textContent = '0%';
-      sliderEyeBlend.addEventListener('input', (e) => {
-        const val = parseInt(e.target.value, 10);
-        this.looper.setEyeBlend(val / 100.0);
-        if (eyeBlendValLabel) eyeBlendValLabel.textContent = `${val}%`;
-      });
-    }
-
-    // Initialize Contour Lock / Attenuation (Default: 100% = contour 100% fixed, ring 1 at 50%)
-    this.looper.setContourFix(1.0);
-    if (sliderContour) {
-      sliderContour.value = '100';
-      if (contourValLabel) contourValLabel.textContent = '100%';
-      sliderContour.addEventListener('input', (e) => {
-        const val = parseInt(e.target.value, 10);
-        this.looper.setContourFix(val / 100.0);
-        if (contourValLabel) contourValLabel.textContent = `${val}%`;
-      });
-    }
-
-    // Initialize Anti-Shake Common-Motion Smoothing (Default: 100%)
-    this.looper.setAntiShake(1.0);
-    if (sliderAntiShake) {
-      sliderAntiShake.value = '100';
-      if (antiShakeValLabel) antiShakeValLabel.textContent = '100%';
-      sliderAntiShake.addEventListener('input', (e) => {
-        const val = parseInt(e.target.value, 10);
-        this.looper.setAntiShake(val / 100.0);
-        if (antiShakeValLabel) antiShakeValLabel.textContent = `${val}%`;
-      });
-    }
-
-    // Animation Audio Delay / Offset Slider (Range: 0.0s to 4.0s, Default: 2.2s)
-    this.autonomousEngine.setAudioDelay(2.2);
-    this.audioLooper.setAudioDelay(2.2);
-    if (sliderAnimAudioDelay) {
-      sliderAnimAudioDelay.value = '2.2';
-      if (animAudioDelayValLabel) animAudioDelayValLabel.textContent = '2.2s';
-      sliderAnimAudioDelay.addEventListener('input', (e) => {
-        const val = parseFloat(e.target.value);
-        this.autonomousEngine.setAudioDelay(val);
-        this.audioLooper.setAudioDelay(val);
-        if (animAudioDelayValLabel) animAudioDelayValLabel.textContent = `${val.toFixed(1)}s`;
-      });
-    }
-
-    // 7. Audio Mute & Volume Controls
-    const btnAudio = document.getElementById('btn-toggle-audio');
-    const audioIcon = document.getElementById('audio-btn-icon');
-    const audioLabel = document.getElementById('audio-btn-label');
-    const sliderVolume = document.getElementById('slider-volume');
-    const volumeValLabel = document.getElementById('volume-val-label');
-
-    if (btnAudio) {
-      btnAudio.addEventListener('click', () => {
-        const isMuted = this.audioLooper.toggleMute();
-        btnAudio.classList.toggle('active', !isMuted);
-        if (audioIcon) audioIcon.textContent = isMuted ? '🔇' : '🔊';
-        if (audioLabel) audioLabel.textContent = isMuted ? 'Muted' : 'Audio';
-      });
-    }
-
-    if (sliderVolume) {
-      sliderVolume.value = '100';
-      this.audioLooper.setVolume(1.0);
-      if (volumeValLabel) volumeValLabel.textContent = '100%';
-      sliderVolume.addEventListener('input', (e) => {
-        const val = parseInt(e.target.value, 10);
-        this.audioLooper.setVolume(val / 100.0);
-        if (volumeValLabel) volumeValLabel.textContent = `${val}%`;
-      });
-    }
-
-    const toggleRecording = async () => {
-      if (!this.looper.isRecording) {
-        // Pre-warm Web Audio context and microphone stream for 0-latency start
-        const audioCtx = await this.audioLooper.ensureAudioContext();
-        if (audioCtx) {
-          this.autonomousEngine.setAudioContext(audioCtx);
-          this.animLibrary.setAudioContext(audioCtx);
-        }
-        await this.audioLooper.getMicrophoneStream();
-
-        const tStart = performance.now();
-        this.looper.startRecording(tStart);
-        this.audioLooper.startRecording(tStart);
-        btnRecord.classList.add('recording');
-        recLabel.textContent = 'Stop Recording';
-        btnToggleLoop.disabled = true;
-        btnClearLoop.disabled = true;
-        appStateLabel.textContent = 'RECORDING';
-      } else {
-        this.looper.stopRecording();
-        btnRecord.classList.remove('recording');
-        recLabel.textContent = 'Record Expression';
-        btnToggleLoop.disabled = false;
-        btnClearLoop.disabled = false;
-        if (btnSaveAnim) btnSaveAnim.disabled = false;
-        btnToggleLoop.classList.add('active');
-        loopBtnIcon.textContent = '❚❚';
-        loopLabel.textContent = 'Loop ON';
-        appStateLabel.textContent = 'LOOPING';
-
-        const audioBuf = await this.audioLooper.stopRecording(this.looper.loopDurationMs);
-        if (audioBuf && this.looper.isPlaying) {
-          this.audioLooper.startPlayback(0, this.looper.loopDurationMs / 1000.0);
-        }
-      }
-    };
-
-    btnRecord.addEventListener('click', toggleRecording);
-
-    btnToggleLoop.addEventListener('click', () => {
-      this.looper.togglePlayback();
-      const isPlaying = this.looper.isPlaying;
-      btnToggleLoop.classList.toggle('active', isPlaying);
-      loopBtnIcon.textContent = isPlaying ? '❚❚' : '▶';
-      loopLabel.textContent = isPlaying ? 'Loop ON' : 'Loop OFF';
-      appStateLabel.textContent = isPlaying ? 'LOOPING' : 'LIVE';
-
-      if (isPlaying && this.looper.loopDurationMs > 0) {
-        const elapsed = (performance.now() - this.looper.playbackStartTime) * this.looper.playbackSpeed;
-        const currentSec = (elapsed % this.looper.loopDurationMs) / 1000.0;
-        this.audioLooper.startPlayback(currentSec, this.looper.loopDurationMs / 1000.0);
-      } else {
-        this.audioLooper.stopPlayback();
-      }
-    });
-
-    btnClearLoop.addEventListener('click', () => {
-      this.looper.clear();
-      this.audioLooper.clear();
-      btnToggleLoop.disabled = true;
-      btnClearLoop.disabled = true;
-      if (btnSaveAnim) btnSaveAnim.disabled = true;
-      const btnSaveCurrentLoopModal = document.getElementById('btn-save-current-loop-modal');
-      if (btnSaveCurrentLoopModal) btnSaveCurrentLoopModal.disabled = true;
-      btnToggleLoop.classList.remove('active');
-      loopBtnIcon.textContent = '▶';
-      loopLabel.textContent = 'Play Loop';
-      document.getElementById('timeline-progress').style.width = '0%';
-      document.getElementById('time-current').textContent = '0.0s';
-      document.getElementById('time-total').textContent = '0.0s';
-      appStateLabel.textContent = 'LIVE';
-    });
-
-    // Timeline Scrubber Click to Seek
-    if (timelineTrack) {
-      timelineTrack.addEventListener('click', (e) => {
-        if (!this.looper.isPlaying || this.looper.loopDurationMs <= 0) return;
-        const rect = timelineTrack.getBoundingClientRect();
-        const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-        this.looper.playbackStartTime = performance.now() - (ratio * this.looper.loopDurationMs);
-        const targetSec = ratio * (this.looper.loopDurationMs / 1000.0);
-        this.audioLooper.seek(targetSec, this.looper.loopDurationMs / 1000.0);
-      });
-    }
-
-    // 8. Video Performance Uploader
-    const btnUploadVideo = document.getElementById('btn-upload-video');
-    const videoFileInput = document.getElementById('video-file-input');
-    const uploadModal = document.getElementById('upload-modal');
-    const uploadStatusText = document.getElementById('upload-status-text');
-    const uploadProgressFill = document.getElementById('upload-progress-fill');
-    const uploadProgressDetail = document.getElementById('upload-progress-detail');
-    const btnCancelUpload = document.getElementById('btn-cancel-upload');
-
-    if (btnUploadVideo && videoFileInput) {
-      btnUploadVideo.addEventListener('click', () => {
-        videoFileInput.click();
-      });
-
-      videoFileInput.addEventListener('change', async () => {
-        const file = videoFileInput.files?.[0];
-        if (!file) return;
-        videoFileInput.value = '';
-
-        this.isProcessingVideo = true;
-        if (uploadModal) {
-          uploadModal.classList.remove('hidden');
-          if (uploadProgressFill) uploadProgressFill.style.width = '0%';
-          if (uploadProgressDetail) uploadProgressDetail.textContent = '0%';
-          if (uploadStatusText) uploadStatusText.textContent = 'Préparation du fichier vidéo...';
-        }
-
+        this.visitorDetector.setSensitivity(val);
+        if (visitorSensValLabel) visitorSensValLabel.textContent = `${val}%`;
         try {
-          const result = await this.videoExtractor.extract(
-            file,
-            this.tracker,
-            this.looper.cranial,
-            this.audioLooper,
-            ({ percent, message }) => {
-              if (uploadProgressFill) uploadProgressFill.style.width = `${percent}%`;
-              if (uploadProgressDetail) uploadProgressDetail.textContent = `${percent}%`;
-              if (uploadStatusText) uploadStatusText.textContent = message;
-            }
-          );
-
-          // 1. Load extracted facial frames into looper
-          this.looper.loadRecordedFrames(result.frames, result.durationMs);
-
-          // 2. Load extracted audio track into audio looper
-          if (result.audioBuffer) {
-            await this.audioLooper.loadAudioBuffer(result.audioBuffer, result.durationMs / 1000.0);
-            this.audioLooper.startPlayback(0, result.durationMs / 1000.0);
-          } else {
-            this.audioLooper.clear();
-          }
-
-          // 3. Update UI Controls
-          btnToggleLoop.disabled = false;
-          btnClearLoop.disabled = false;
-          if (btnSaveAnim) btnSaveAnim.disabled = false;
-          btnToggleLoop.classList.add('active');
-          loopBtnIcon.textContent = '❚❚';
-          loopLabel.textContent = 'Loop ON';
-          appStateLabel.textContent = 'LOOPING';
-
-          // 4. Show success toast
-          if (calToast && calText) {
-            const durSec = (result.durationMs / 1000.0).toFixed(1);
-            calText.textContent = `✓ Vidéo importée (${durSec}s, ${result.frames.length} frames${result.audioBuffer ? ' + audio' : ''})`;
-            calToast.classList.remove('hidden');
-            setTimeout(() => {
-              calToast.classList.add('hidden');
-            }, 3000);
-          }
-        } catch (err) {
-          console.error('Video extraction failed:', err);
-          if (calToast && calText) {
-            calText.textContent = `Erreur: ${err.message || 'Échec de l\'extraction'}`;
-            calToast.classList.remove('hidden');
-            setTimeout(() => {
-              calToast.classList.add('hidden');
-            }, 3500);
-          }
-        } finally {
-          if (uploadModal) uploadModal.classList.add('hidden');
-          this.isProcessingVideo = false;
-        }
+          localStorage.setItem('photomaton_visitor_sensitivity', String(val));
+        } catch (e) {}
       });
     }
 
-    if (btnCancelUpload) {
-      btnCancelUpload.addEventListener('click', () => {
-        this.videoExtractor.cancel();
-        if (uploadModal) uploadModal.classList.add('hidden');
-        this.isProcessingVideo = false;
-      });
-    }
-
-    // 9. 3D Camera Alignment & Offset Controls
+    // 7. 3D Camera Alignment & Offset Controls
     this.setupAlignControls();
+    this.faceMeshAlignmentControls = setupFaceMeshAlignmentControls(this.renderer);
+    this.setupPresetAudioControls();
+    this.setupPresetExpressionControls();
+    this.audioLibrary = new AudioLibraryControls(this);
+    this.audioLibrary.bind();
 
-    // 10. Dedicated Animation Library & 50% Random Autonomous Playback Controls
+    // 8. Dedicated Animation Library & 50% Random Autonomous Playback Controls
     this.setupAnimationLibraryControls();
+
+    // 9. Motion-only preset recorder (no microphone and no audio payload)
+    this.setupMotionPresetRecorder();
+
+    // 10. Optional ComfyUI workflow execution on new visitor
+    this.setupComfyUiControls();
+    this.updateAutonomousAvailability(true);
 
     // Keyboard Shortcuts
     window.addEventListener('keydown', (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
 
-      if (e.code === 'Space') {
-        e.preventDefault();
-        toggleRecording();
-      } else if (e.key.toLowerCase() === 'm') {
-        btnMirror?.click();
-      } else if (e.key.toLowerCase() === 'u') {
-        btnUploadVideo?.click();
-      } else if (e.key.toLowerCase() === 'o') {
+      if (e.key.toLowerCase() === 'o') {
         document.getElementById('btn-toggle-align')?.click();
       } else if (e.key.toLowerCase() === 'a') {
         btnAutonomous?.click();
+      }
+    });
+  }
+
+  setupPresetExpressionControls() {
+    const slider = document.getElementById('slider-expression-intensity');
+    const value = document.getElementById('expression-intensity-value');
+    if (!slider || !value) return;
+    const storageKey = 'photomaton_preset_expression_intensity';
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (saved !== null) this.autonomousEngine.setPresetExpressionIntensity(Number(saved) / 100);
+    } catch { /* Keep the default intensity. */ }
+    const refresh = () => {
+      const percent = Math.round(this.autonomousEngine.presetExpressionIntensity * 100);
+      slider.value = percent;
+      value.textContent = `${percent}%`;
+    };
+    refresh();
+    slider.addEventListener('input', () => {
+      this.autonomousEngine.setPresetExpressionIntensity(Number(slider.value) / 100);
+      refresh();
+      try { localStorage.setItem(storageKey, slider.value); } catch { /* Session-only adjustment. */ }
+    });
+  }
+
+  refreshPresetAudioButton() {
+    const button = document.getElementById('btn-preset-audio');
+    if (!button) return;
+    const player = this.autonomousEngine.presetAudio;
+    button.textContent = this.presetAudioLoading ? 'Chargement audio…' : player.enabled ? '🔊 Audio' : '🔇 Audio';
+    button.classList.toggle('active', player.enabled);
+    button.setAttribute('aria-pressed', String(player.enabled));
+    button.disabled = this.presetAudioLoading || !player.urls.length;
+  }
+
+  setupPresetAudioControls() {
+    const button = document.getElementById('btn-preset-audio');
+    button?.addEventListener('click', async () => {
+      if (this.presetAudioLoading) return;
+      const enabled = !this.autonomousEngine.presetAudio.enabled;
+      this.presetAudioLoading = true;
+      this.refreshPresetAudioButton();
+      this.audioLibrary?.updateState();
+      try {
+        await this.autonomousEngine.setPresetAudioEnabled(enabled);
+        const active = this.autonomousEngine.presetAudio.enabled;
+        if (active) {
+          await this.canvasBroadcaster.setAudioStream(this.autonomousEngine.presetAudio.destination.stream);
+        }
+        this.showNotification(active ? 'Audio et lipsync activés pour les presets' : 'Audio des presets désactivé',
+          active ? 'success' : '', 3000, 'preset-audio');
+      } catch (error) {
+        await this.autonomousEngine.setPresetAudioEnabled(false);
+        this.showNotification(`Audio indisponible · ${error.message}`, 'error', 5000, 'preset-audio');
+      } finally {
+        this.presetAudioLoading = false;
+        this.refreshPresetAudioButton();
+        this.audioLibrary?.updateState();
+        this.updateAnimationPlaybackUI(true);
       }
     });
   }
@@ -663,6 +455,8 @@ class App {
     const alignCrosshair = document.getElementById('align-crosshair');
     const checkAlignGrid = document.getElementById('check-align-grid');
     const btnResetCamAll = document.getElementById('btn-reset-cam-all');
+    const btnSaveCam = document.getElementById('btn-save-cam');
+    const saveStatus = document.getElementById('align-save-status');
 
     const sliderCamX = document.getElementById('slider-cam-x');
     const valCamX = document.getElementById('val-cam-x');
@@ -683,15 +477,42 @@ class App {
 
     this.isAlignModeActive = false;
 
-    // Default camera offset is strictly neutral (0 offset, 0 tilt, 1.0 zoom)
-    // Clear any stale tilted camera offset from localStorage so the base alignment is strictly correct
-    localStorage.removeItem('facemesh_camera_offset');
+    const storageKey = 'facemesh_camera_offset';
     const offset = { x: 0, y: 0, pitch: 0, yaw: 0, roll: 0, zoom: 1.0 };
+    let savedOffset = null;
+    try {
+      const stored = JSON.parse(localStorage.getItem(storageKey));
+      if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
+        let hasValue = false;
+        for (const [key, min, max] of [['x', -300, 300], ['y', -300, 300], ['pitch', -45, 45], ['yaw', -45, 45], ['roll', -30, 30], ['zoom', 0.5, 1.8]]) {
+          if (Number.isFinite(stored[key])) {
+            offset[key] = Math.max(min, Math.min(max, stored[key]));
+            hasValue = true;
+          }
+        }
+        if (hasValue) savedOffset = { ...offset };
+      }
+    } catch { /* Start neutral if browser storage is unavailable or invalid. */ }
     this.renderer.setCameraOffset(offset);
 
-    const saveOffset = () => {
-      localStorage.setItem('facemesh_camera_offset', JSON.stringify(this.renderer.getCameraOffset()));
+    const updateSaveStatus = () => {
+      const current = this.renderer.getCameraOffset();
+      const unchanged = savedOffset && Object.keys(offset).every(key => Math.abs(current[key] - savedOffset[key]) < 0.000001);
+      if (saveStatus) saveStatus.textContent = unchanged ? 'Réglage enregistré' : 'Cliquez sur Save pour mémoriser';
     };
+
+    btnSaveCam?.addEventListener('click', () => {
+      try {
+        const current = this.renderer.getCameraOffset();
+        localStorage.setItem(storageKey, JSON.stringify(current));
+        savedOffset = current;
+        updateSaveStatus();
+        this.showNotification('Alignement 3D enregistré sur ce navigateur', 'success', 2500, 'camera-alignment');
+      } catch {
+        if (saveStatus) saveStatus.textContent = 'Enregistrement indisponible sur ce navigateur';
+        this.showNotification('Impossible de mémoriser l’alignement 3D', 'error', 3500, 'camera-alignment');
+      }
+    });
 
     const updateUIFromState = () => {
       const cur = this.renderer.getCameraOffset();
@@ -712,6 +533,7 @@ class App {
 
       if (sliderCamZoom) sliderCamZoom.value = Math.round(cur.zoom * 100);
       if (valCamZoom) valCamZoom.textContent = `${Math.round(cur.zoom * 100)}%`;
+      updateSaveStatus();
     };
 
     updateUIFromState();
@@ -742,7 +564,7 @@ class App {
         const val = parseFloat(e.target.value);
         this.renderer.setCameraOffset({ x: val });
         if (valCamX) valCamX.textContent = `${Math.round(val)}px`;
-        saveOffset();
+        updateSaveStatus();
       });
     }
 
@@ -751,7 +573,7 @@ class App {
         const val = parseFloat(e.target.value);
         this.renderer.setCameraOffset({ y: val });
         if (valCamY) valCamY.textContent = `${Math.round(val)}px`;
-        saveOffset();
+        updateSaveStatus();
       });
     }
 
@@ -760,7 +582,7 @@ class App {
         const val = parseFloat(e.target.value);
         this.renderer.setCameraOffset({ pitch: val });
         if (valCamPitch) valCamPitch.textContent = `${val.toFixed(1)}°`;
-        saveOffset();
+        updateSaveStatus();
       });
     }
 
@@ -769,7 +591,7 @@ class App {
         const val = parseFloat(e.target.value);
         this.renderer.setCameraOffset({ yaw: val });
         if (valCamYaw) valCamYaw.textContent = `${val.toFixed(1)}°`;
-        saveOffset();
+        updateSaveStatus();
       });
     }
 
@@ -778,7 +600,7 @@ class App {
         const val = parseFloat(e.target.value);
         this.renderer.setCameraOffset({ roll: val });
         if (valCamRoll) valCamRoll.textContent = `${val.toFixed(1)}°`;
-        saveOffset();
+        updateSaveStatus();
       });
     }
 
@@ -788,7 +610,7 @@ class App {
         const z = pct / 100.0;
         this.renderer.setCameraOffset({ zoom: z });
         if (valCamZoom) valCamZoom.textContent = `${Math.round(pct)}%`;
-        saveOffset();
+        updateSaveStatus();
       });
     }
 
@@ -805,14 +627,13 @@ class App {
         else if (axis === 'zoom') cur.zoom = 1.0;
         this.renderer.setCameraOffset(cur);
         updateUIFromState();
-        saveOffset();
+        updateSaveStatus();
       });
     });
 
     // Reset All
     if (btnResetCamAll) {
       btnResetCamAll.addEventListener('click', () => {
-        localStorage.removeItem('facemesh_camera_offset');
         this.renderer.resetCameraOffset();
         updateUIFromState();
       });
@@ -882,7 +703,7 @@ class App {
         if (isDragging) {
           isDragging = false;
           alignOverlay.classList.remove('dragging');
-          saveOffset();
+          updateSaveStatus();
         }
       });
 
@@ -894,113 +715,23 @@ class App {
         const newZoom = Math.max(0.5, Math.min(1.8, Number((cur.zoom + zoomDelta).toFixed(2))));
         this.renderer.setCameraOffset({ zoom: newZoom });
         updateUIFromState();
-        saveOffset();
+        updateSaveStatus();
       }, { passive: false });
     }
   }
 
   setupAnimationLibraryControls() {
-    const btnSaveAnim = document.getElementById('btn-save-anim');
     const btnOpenAnimLibrary = document.getElementById('btn-open-anim-library');
     const animLibraryModal = document.getElementById('anim-library-modal');
     const backdropAnimLibrary = document.getElementById('backdrop-anim-library');
     const btnCloseAnimModal = document.getElementById('btn-close-anim-modal');
     const btnCloseAnimModal2 = document.getElementById('btn-close-anim-modal-2');
-    const btnSaveCurrentLoopModal = document.getElementById('btn-save-current-loop-modal');
     const toggleAutoPlayback = document.getElementById('toggle-autonomous-playback');
-
-    const saveAnimModal = document.getElementById('save-anim-modal');
-    const backdropSaveAnim = document.getElementById('backdrop-save-anim');
-    const btnCloseSaveModal = document.getElementById('btn-close-save-modal');
-    const btnCancelSaveAnim = document.getElementById('btn-cancel-save-anim');
-    const btnConfirmSaveAnim = document.getElementById('btn-confirm-save-anim');
-    const saveAnimNameInput = document.getElementById('save-anim-name-input');
-
-    const openSaveModal = () => {
-      if (!this.looper.recordedFrames || this.looper.recordedFrames.length === 0) {
-        alert("Enregistrez d'abord une expression avec le bouton Record ou importez une vidéo.");
-        return;
-      }
-      if (saveAnimModal) {
-        saveAnimModal.classList.remove('hidden');
-        if (saveAnimNameInput) {
-          saveAnimNameInput.value = '';
-          const defaultName = `Performance ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
-          saveAnimNameInput.placeholder = defaultName;
-          setTimeout(() => saveAnimNameInput.focus(), 50);
-        }
-      }
-    };
-
-    const closeSaveModal = () => {
-      if (saveAnimModal) saveAnimModal.classList.add('hidden');
-    };
-
-    const handleConfirmSave = async () => {
-      if (!this.looper.recordedFrames || this.looper.recordedFrames.length === 0) return;
-      const defaultName = `Performance ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
-      const name = (saveAnimNameInput && saveAnimNameInput.value.trim()) ? saveAnimNameInput.value.trim() : defaultName;
-
-      btnConfirmSaveAnim.disabled = true;
-      btnConfirmSaveAnim.textContent = 'Enregistrement...';
-
-      try {
-        const audioData = this.audioLooper ? this.audioLooper.exportWavBase64() : null;
-        const exported = this.looper.exportAnimation(name, audioData);
-        if (exported) {
-          await this.animLibrary.saveAnimation(name, exported);
-          this.updateAnimationBadge();
-          this.renderAnimationList();
-          closeSaveModal();
-
-          const calToast = document.getElementById('calibration-toast');
-          const calText = document.getElementById('cal-text');
-          if (calToast && calText) {
-            calText.textContent = `✓ Animation "${name}" sauvegardée dans public/animations/ !`;
-            calToast.classList.remove('hidden');
-            setTimeout(() => calToast.classList.add('hidden'), 3000);
-          }
-        }
-      } catch (err) {
-        console.error('Save animation error:', err);
-        alert(`Échec de la sauvegarde: ${err.message}`);
-      } finally {
-        btnConfirmSaveAnim.disabled = false;
-        btnConfirmSaveAnim.textContent = 'Enregistrer';
-      }
-    };
-
-    if (btnSaveAnim) {
-      btnSaveAnim.addEventListener('click', openSaveModal);
-    }
-    if (btnSaveCurrentLoopModal) {
-      btnSaveCurrentLoopModal.addEventListener('click', openSaveModal);
-    }
-
-    if (btnCloseSaveModal) btnCloseSaveModal.addEventListener('click', closeSaveModal);
-    if (btnCancelSaveAnim) btnCancelSaveAnim.addEventListener('click', closeSaveModal);
-    if (backdropSaveAnim) backdropSaveAnim.addEventListener('click', closeSaveModal);
-    if (btnConfirmSaveAnim) btnConfirmSaveAnim.addEventListener('click', handleConfirmSave);
-    if (saveAnimNameInput) {
-      saveAnimNameInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          handleConfirmSave();
-        } else if (e.key === 'Escape') {
-          closeSaveModal();
-        }
-      });
-    }
 
     // Open Animation Library Modal
     const openLibraryModal = () => {
       this.renderAnimationList();
-      if (animLibraryModal) {
-        animLibraryModal.classList.remove('hidden');
-        if (btnSaveCurrentLoopModal) {
-          btnSaveCurrentLoopModal.disabled = (!this.looper.recordedFrames || this.looper.recordedFrames.length === 0);
-        }
-      }
+      if (animLibraryModal) animLibraryModal.classList.remove('hidden');
     };
 
     const closeLibraryModal = () => {
@@ -1028,9 +759,376 @@ class App {
       });
     }
 
+    // Import Animation JSON File
+    const btnImportAnimFile = document.getElementById('btn-import-anim-file');
+    const inputImportAnim = document.getElementById('input-import-anim');
+    if (btnImportAnimFile && inputImportAnim) {
+      btnImportAnimFile.addEventListener('click', () => inputImportAnim.click());
+      inputImportAnim.addEventListener('change', async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        try {
+          const text = await file.text();
+          const data = JSON.parse(text);
+          if (!data || (!data.frames && !data.headPoseTrack)) {
+            alert("Fichier d'animation invalide : doit contenir des frames ou tracks d'animation faciale.");
+            return;
+          }
+          const animName = data.name || file.name.replace('.json', '');
+          await this.animLibrary.saveAnimation(animName, data);
+          this.renderAnimationList();
+          this.updateAnimationBadge();
+
+          const calToast = document.getElementById('calibration-toast');
+          const calText = document.getElementById('cal-text');
+          if (calToast && calText) {
+            calText.textContent = `✓ Animation "${animName}" importée avec succès !`;
+            calToast.classList.remove('hidden');
+            setTimeout(() => calToast.classList.add('hidden'), 3000);
+          }
+        } catch (err) {
+          console.error('Import animation error:', err);
+          alert(`Erreur d'importation: ${err.message}`);
+        } finally {
+          inputImportAnim.value = '';
+        }
+      });
+    }
+
     this.animLibrary.addEventListener('list:updated', () => {
       this.updateAnimationBadge();
     });
+  }
+
+  setupMotionPresetRecorder() {
+    const button = document.getElementById('btn-record-motion-preset');
+    const nameInput = document.getElementById('motion-preset-name');
+    if (!button || !nameInput) return;
+
+    button.addEventListener('click', async () => {
+      if (this.isSavingPresetRecording) return;
+      if (this.presetRecorder.isRecording) {
+        await this.stopAndSavePresetRecording();
+        return;
+      }
+
+      // Recording always uses the live tracker, never the autonomous animation.
+      if (this.forceAutonomousMode) {
+        this.forceAutonomousMode = false;
+        document.getElementById('btn-toggle-autonomous')?.classList.remove('active');
+        this.autonomousEngine.stopAutonomous();
+        this.renderer.unfreezeFaceTexture();
+        this.setState('LIVE');
+      }
+
+      if (!this.camera.isStreaming) {
+        alert('La caméra doit être active pour enregistrer un preset.');
+        return;
+      }
+      if (!this.lastTrackingLandmarks) {
+        alert('Placez votre visage devant la caméra avant de démarrer.');
+        return;
+      }
+
+      this.presetRecorder.start(performance.now());
+      nameInput.disabled = true;
+      button.classList.add('recording');
+      button.setAttribute('aria-pressed', 'true');
+      button.innerHTML = '<span>■ Arrêter et ajouter</span>';
+      this.updateMotionPresetRecorderUI();
+    });
+  }
+
+  setupComfyUiControls() {
+    const modal = document.getElementById('comfy-settings-modal');
+    const openButton = document.getElementById('btn-open-comfy-settings');
+    const closeButton = document.getElementById('btn-close-comfy-settings');
+    const backdrop = document.getElementById('backdrop-comfy-settings');
+    const saveButton = document.getElementById('btn-save-comfy-settings');
+    const testButton = document.getElementById('btn-test-comfy');
+    const runButton = document.getElementById('btn-run-comfy');
+    const enabledInput = document.getElementById('comfy-enabled');
+    const baseUrlInput = document.getElementById('comfy-base-url');
+    const workflowSelect = document.getElementById('comfy-workflow-select');
+
+    if (!modal || !openButton || !baseUrlInput || !workflowSelect) return;
+    enabledInput.checked = this.comfySettings.enabled;
+    baseUrlInput.value = this.comfySettings.baseUrl;
+    this.updateComfyStatusButton();
+
+    const close = () => modal.classList.add('hidden');
+    openButton.addEventListener('click', async () => {
+      modal.classList.remove('hidden');
+      await this.refreshComfyWorkflowList();
+    });
+    closeButton?.addEventListener('click', close);
+    backdrop?.addEventListener('click', close);
+
+    saveButton?.addEventListener('click', () => {
+      this.comfySettings = {
+        enabled: !!enabledInput.checked,
+        baseUrl: baseUrlInput.value.trim(),
+        workflowFilename: workflowSelect.value
+      };
+      localStorage.setItem('photomaton_comfy_enabled', String(this.comfySettings.enabled));
+      localStorage.setItem('photomaton_comfy_base_url', this.comfySettings.baseUrl);
+      localStorage.setItem('photomaton_comfy_workflow', this.comfySettings.workflowFilename);
+      this.updateComfyStatusButton();
+      this.tryRunComfyForVisitor();
+      this.setComfySettingsStatus(this.comfySettings.enabled ? 'Configuration enregistrée et activée.' : 'Configuration enregistrée, exécution désactivée.', 'success');
+      setTimeout(close, 550);
+    });
+
+    testButton?.addEventListener('click', async () => {
+      testButton.disabled = true;
+      this.setComfySettingsStatus('Connexion à ComfyUI…');
+      this.showNotification('Test de connexion à ComfyUI…', 'running', 0);
+      try {
+        const response = await fetch('/api/comfy/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ baseUrl: baseUrlInput.value.trim() })
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `Erreur ${response.status}`);
+        this.setComfySettingsStatus(`Connexion réussie à ${result.baseUrl}.`, 'success');
+        this.showNotification(`ComfyUI connecté · ${result.baseUrl}`, 'success');
+      } catch (error) {
+        this.setComfySettingsStatus(`Échec : ${error.message}`, 'error');
+        this.showNotification(`Échec ComfyUI · ${error.message}`, 'error', 5000);
+      } finally {
+        testButton.disabled = false;
+      }
+    });
+
+    runButton?.addEventListener('click', async () => {
+      runButton.disabled = true;
+      this.setComfySettingsStatus('Envoi du workflow à ComfyUI…');
+      try {
+        const result = await this.queueComfyWorkflow({
+          baseUrl: baseUrlInput.value.trim(),
+          workflowFilename: workflowSelect.value
+        });
+        this.setComfySettingsStatus(`Workflow ${result.workflowFilename} ajouté à la file${result.promptId ? ` · ${result.promptId}` : ''}.`, 'success');
+      } catch (error) {
+        this.setComfySettingsStatus(`Échec : ${error.message}`, 'error');
+      } finally {
+        runButton.disabled = !this.canUseAutonomous();
+      }
+    });
+  }
+
+  async refreshComfyWorkflowList() {
+    const select = document.getElementById('comfy-workflow-select');
+    if (!select) return;
+    try {
+      const response = await fetch('/api/comfy/workflows', { cache: 'no-cache' });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || `Erreur ${response.status}`);
+      const workflows = result.workflows || [];
+      select.innerHTML = '';
+      if (workflows.length === 0) {
+        select.innerHTML = '<option value="">Aucun fichier JSON trouvé</option>';
+        this.setComfySettingsStatus('Ajoutez un workflow JSON au format API dans comfyWorkflow/.', 'error');
+        return;
+      }
+      for (const filename of workflows) {
+        const option = document.createElement('option');
+        option.value = filename;
+        option.textContent = filename;
+        select.appendChild(option);
+      }
+      select.value = workflows.includes(this.comfySettings.workflowFilename)
+        ? this.comfySettings.workflowFilename
+        : workflows[0];
+      this.setComfySettingsStatus(`${workflows.length} workflow${workflows.length > 1 ? 's' : ''} disponible${workflows.length > 1 ? 's' : ''}.`, 'success');
+    } catch (error) {
+      this.setComfySettingsStatus(`Impossible de lire comfyWorkflow/ : ${error.message}`, 'error');
+    }
+  }
+
+  setComfySettingsStatus(message, state = '') {
+    const status = document.getElementById('comfy-settings-status');
+    if (!status) return;
+    status.textContent = message;
+    status.classList.toggle('success', state === 'success');
+    status.classList.toggle('error', state === 'error');
+  }
+
+  showNotification(message, state = '', durationMs = 3500, key = 'general') {
+    const container = document.getElementById('app-notifications');
+    if (!container) return;
+    let entry = this.notificationEntries.get(key);
+    if (!entry) {
+      const element = document.createElement('div');
+      const icon = document.createElement('span');
+      const text = document.createElement('span');
+      icon.className = 'app-notification-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      element.append(icon, text);
+      container.append(element);
+      entry = { element, icon, text, timer: null };
+      this.notificationEntries.set(key, entry);
+    }
+    clearTimeout(entry.timer);
+    entry.text.textContent = message;
+    entry.icon.textContent = state === 'success' ? '✓' : state === 'error' ? '!' : '⚙';
+    entry.element.className = `app-notification ${state}`;
+    if (durationMs > 0) {
+      entry.timer = setTimeout(() => {
+        entry.element.remove();
+        this.notificationEntries.delete(key);
+      }, durationMs);
+    }
+  }
+
+  updateComfyStatusButton(state = '') {
+    const button = document.getElementById('btn-open-comfy-settings');
+    const label = document.getElementById('comfy-button-label');
+    if (!button || !label) return;
+    button.classList.toggle('active', this.comfySettings.enabled);
+    button.classList.toggle('comfy-running', state === 'running');
+    button.classList.toggle('comfy-error', state === 'error');
+    label.textContent = state === 'running' ? '⚙ ComfyUI…'
+      : state === 'error' ? '⚠ ComfyUI'
+      : this.comfySettings.enabled ? '⚙ ComfyUI ON' : '⚙ ComfyUI';
+  }
+
+  scheduleComfyWorkflowForVisitor() {
+    if (this.comfyVisitorTimer !== null) {
+      clearTimeout(this.comfyVisitorTimer);
+      this.comfyVisitorTimer = null;
+    }
+    this.comfyVisitorPending = !!(this.comfySettings.enabled && this.comfySettings.baseUrl);
+    this.comfyVisitorReadyAt = performance.now() + 1000;
+    this.tryRunComfyForVisitor();
+  }
+
+  tryRunComfyForVisitor() {
+    if (!this.comfyVisitorPending) return;
+    if (!this.comfySettings.enabled || !this.comfySettings.baseUrl) {
+      clearTimeout(this.comfyVisitorTimer);
+      this.comfyVisitorTimer = null;
+      this.comfyVisitorPending = false;
+      return;
+    }
+    if (!this.canUseAutonomous()) return;
+    const remaining = Math.max(0, this.comfyVisitorReadyAt - performance.now());
+    if (remaining > 0) {
+      if (this.comfyVisitorTimer === null) {
+        this.comfyVisitorTimer = setTimeout(() => {
+          this.comfyVisitorTimer = null;
+          this.tryRunComfyForVisitor();
+        }, remaining);
+      }
+      return;
+    }
+    clearTimeout(this.comfyVisitorTimer);
+    this.comfyVisitorTimer = null;
+    this.comfyVisitorPending = false;
+    this.executeComfyWorkflow();
+  }
+
+  async executeComfyWorkflow() {
+    if (!this.comfySettings.enabled || !this.comfySettings.baseUrl) return;
+    this.updateComfyStatusButton('running');
+    try {
+      const result = await this.queueComfyWorkflow(this.comfySettings);
+      console.log(`[ComfyUI] Workflow ${result.workflowFilename} envoyé, prompt ${result.promptId || 'accepté'}`);
+      this.updateComfyStatusButton();
+    } catch (error) {
+      console.error('[ComfyUI] Échec du workflow:', error);
+      this.updateComfyStatusButton('error');
+      this.setComfySettingsStatus(`Échec du workflow : ${error.message}`, 'error');
+    }
+  }
+
+  async queueComfyWorkflow(settings) {
+    if (!this.canUseAutonomous()) {
+      throw new Error('Un cliché FaceMesh du visiteur actuel doit être mémorisé avant de lancer ComfyUI.');
+    }
+    const callId = ++this.comfyCallId;
+    this.showNotification('Appel à ComfyUI…', 'running', 0, 'comfy-call');
+    try {
+      const response = await fetch('/api/comfy/queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseUrl: settings.baseUrl,
+          workflowFilename: settings.workflowFilename
+        })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || `Erreur ${response.status}`);
+      if (callId === this.comfyCallId) {
+        this.showNotification('Workflow ComfyUI envoyé', 'success', 3000, 'comfy-call');
+      }
+      return result;
+    } catch (error) {
+      if (callId === this.comfyCallId) {
+        this.showNotification(`Échec ComfyUI · ${error.message}`, 'error', 5000, 'comfy-call');
+      }
+      throw error;
+    }
+  }
+
+  updateMotionPresetRecorderUI(now = performance.now()) {
+    const status = document.getElementById('motion-preset-status');
+    if (!status) return;
+
+    if (this.isSavingPresetRecording) {
+      status.textContent = 'Sauvegarde…';
+      return;
+    }
+    if (!this.presetRecorder.isRecording) {
+      status.textContent = 'Commencez visage neutre · sans audio';
+      return;
+    }
+
+    const seconds = this.presetRecorder.getElapsedMs(now) / 1000;
+    status.textContent = `● REC ${seconds.toFixed(1)}s / 30s · ${this.presetRecorder.frames.length} frames`;
+  }
+
+  async stopAndSavePresetRecording() {
+    if (!this.presetRecorder.isRecording || this.isSavingPresetRecording) return;
+
+    const button = document.getElementById('btn-record-motion-preset');
+    const nameInput = document.getElementById('motion-preset-name');
+    this.isSavingPresetRecording = true;
+    if (button) button.disabled = true;
+    this.updateMotionPresetRecorderUI();
+
+    try {
+      const animation = this.presetRecorder.stop(nameInput?.value || '', performance.now());
+      const saved = await this.animLibrary.saveAnimation(animation.name, animation);
+      this.renderAnimationList();
+      this.updateAnimationBadge();
+
+      if (nameInput) nameInput.value = '';
+      const calToast = document.getElementById('calibration-toast');
+      const calText = document.getElementById('cal-text');
+      if (calToast && calText) {
+        calText.textContent = `✓ Preset mouvement « ${saved?.name || animation.name} » ajouté à la bibliothèque (sans audio)`;
+        calToast.classList.remove('hidden');
+        setTimeout(() => calToast.classList.add('hidden'), 3500);
+      }
+
+      document.getElementById('anim-library-modal')?.classList.remove('hidden');
+    } catch (err) {
+      console.error('Motion preset recording error:', err);
+      alert(err.message || "Impossible d'enregistrer ce preset.");
+    } finally {
+      this.isSavingPresetRecording = false;
+      this.presetRecorder.reset();
+      if (nameInput) nameInput.disabled = false;
+      if (button) {
+        button.disabled = false;
+        button.classList.remove('recording');
+        button.setAttribute('aria-pressed', 'false');
+        button.innerHTML = '<span>● Enregistrer un preset</span>';
+      }
+      this.updateMotionPresetRecorderUI();
+    }
   }
 
   updateAnimationBadge() {
@@ -1039,6 +1137,37 @@ class App {
     const count = this.animLibrary ? this.animLibrary.getActiveAnimationCount() : 0;
     if (badge) badge.textContent = count;
     if (countLabel) countLabel.textContent = `${count} animation${count > 1 ? 's' : ''}`;
+  }
+
+  updateAnimationPlaybackUI(force = false) {
+    const isAutonomous = this.appState === 'AUTONOMOUS';
+    const animation = isAutonomous ? this.autonomousEngine.activeAnimation : null;
+    const audio = this.audioLibrary?.getPreviewStatus() || this.autonomousEngine.getAudioPlaybackStatus();
+    const animationKey = animation ? (animation.id || animation.filename || animation.name) : '';
+    const statusKey = `${this.appState}:${animationKey}:${animation?.name || ''}:${audio.label}:${audio.playing}`;
+    if (!force && statusKey === this.lastAnimationStatusKey) return;
+    this.lastAnimationStatusKey = statusKey;
+
+    const name = animation?.name || (isAutonomous ? 'Regard autonome' : this.appState === 'WAITING' ? 'En attente' : 'Suivi en direct');
+    const label = document.getElementById('active-animation-label');
+    if (label) {
+      label.textContent = name;
+      label.title = name;
+    }
+    document.getElementById('btn-open-anim-library')?.classList.toggle('is-playing', !!animation);
+    const audioLabel = document.getElementById('active-audio-label');
+    if (audioLabel) {
+      audioLabel.textContent = audio.label;
+      audioLabel.title = audio.label;
+    }
+    document.getElementById('audio-playback-status')?.classList.toggle('is-playing', audio.playing);
+    this.audioLibrary?.updateState();
+    for (const card of document.querySelectorAll('#anim-list-container [data-animation-key]')) {
+      const isPlaying = !!animation && card.dataset.animationKey === animationKey;
+      card.classList.toggle('is-playing', isPlaying);
+      card.setAttribute('aria-current', String(isPlaying));
+      card.querySelector('.anim-item-badge.playing')?.classList.toggle('hidden', !isPlaying);
+    }
   }
 
   renderAnimationList() {
@@ -1061,6 +1190,7 @@ class App {
     for (const anim of animations) {
       const card = document.createElement('div');
       card.className = 'anim-item-card';
+      card.dataset.animationKey = anim.id || anim.filename || anim.name;
 
       const durSec = ((anim.durationMs || 0) / 1000).toFixed(1);
       const isPreset = anim.id && anim.id.startsWith('preset_');
@@ -1069,6 +1199,7 @@ class App {
         <div class="anim-item-info">
           <div class="anim-item-title-row">
             <span class="anim-item-name">${anim.name || 'Animation'}</span>
+            <span class="anim-item-badge playing hidden">▶ En cours</span>
             ${anim.hasAudio ? '<span class="anim-item-badge audio">🔊 Audio</span>' : ''}
             ${isPreset ? '<span class="anim-item-badge">Prédéfini</span>' : '<span class="anim-item-badge">Enregistré</span>'}
           </div>
@@ -1078,23 +1209,56 @@ class App {
         </div>
         <div class="anim-item-actions">
           <button class="anim-btn-test" title="Tester immédiatement l'animation sur le masque">▶ Tester</button>
+          <button class="anim-btn-download" title="Télécharger le fichier JSON de cette animation">⬇</button>
           <button class="anim-btn-del" title="Supprimer cette animation">🗑️</button>
         </div>
       `;
 
       // Test Button
       const btnTest = card.querySelector('.anim-btn-test');
+      btnTest.disabled = !this.canUseAutonomous();
       btnTest.addEventListener('click', async () => {
+        if (this.presetRecorder.isRecording) {
+          alert("Arrêtez d'abord l'enregistrement du preset.");
+          return;
+        }
         const fullAnim = await this.animLibrary.getAnimationData(anim.filename || anim.id);
         if (fullAnim) {
+          if (!this.canUseAutonomous()) {
+            this.showNotification('Un cliché FaceMesh mémorisé est nécessaire pour tester une animation.');
+            return;
+          }
           // If not in autonomous mode, enter autonomous mode
           if (this.appState !== 'AUTONOMOUS') {
+            if (!this.applyBestTextureReference(performance.now())) {
+              this.showNotification('Placez le visage de face, sans l’incliner, pour mémoriser le cliché.');
+              return;
+            }
             this.setState('AUTONOMOUS');
-            this.applyBestTextureReference(performance.now());
             this.autonomousEngine.startAutonomous(performance.now(), this.lastTrackingLandmarks, this.lastTrackingHeadPose);
           }
+          this.forceAutonomousMode = true;
+          document.getElementById('btn-toggle-autonomous')?.classList.add('active');
           this.autonomousEngine.playAnimation(fullAnim, performance.now());
+          this.updateAnimationPlaybackUI();
           document.getElementById('anim-library-modal')?.classList.add('hidden');
+        }
+      });
+
+      // Download Button
+      const btnDownload = card.querySelector('.anim-btn-download');
+      btnDownload.addEventListener('click', async () => {
+        const fullAnim = await this.animLibrary.getAnimationData(anim.filename || anim.id);
+        if (fullAnim) {
+          const blob = new Blob([JSON.stringify(fullAnim, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = anim.filename || `${anim.id}.json`;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
         }
       });
 
@@ -1110,6 +1274,8 @@ class App {
 
       container.appendChild(card);
     }
+    this.updateAutonomousAvailability(true);
+    this.updateAnimationPlaybackUI(true);
   }
 
   /**
@@ -1118,20 +1284,11 @@ class App {
   startLoop() {
     const statFps = document.getElementById('stat-fps');
     const statLatency = document.getElementById('stat-latency');
-    const timeCurrent = document.getElementById('time-current');
-    const timeTotal = document.getElementById('time-total');
-    const progressEl = document.getElementById('timeline-progress');
 
     this.setState('WAITING');
 
     const loop = () => {
       const now = performance.now();
-
-      // Pause webcam inference if background video extraction is processing
-      if (this.isProcessingVideo) {
-        this.rafId = requestAnimationFrame(loop);
-        return;
-      }
 
       // 1. MediaPipe Frame Inference
       const rawTracking = this.tracker.processVideoFrame(this.videoEl, now);
@@ -1143,6 +1300,7 @@ class App {
       const ar = (this.videoEl.videoWidth || 1280) / Math.max(1, (this.videoEl.videoHeight || 720));
       this.visitorDetector.setAspectRatio(ar);
       this.visitorDetector.update(isFacePresent ? rawTracking : null, this.videoEl, now);
+      this.updateAutonomousAvailability();
 
       if (isFacePresent) {
         this.consecutiveDetectedFrames++;
@@ -1174,8 +1332,8 @@ class App {
           this.historyBuffer.recordFrame(this.videoEl, rawTracking, now);
         }
 
-        // If a clean, unobstructed frontal snapshot has been captured, link it to autonomous engine
-        const bestCand = this.historyBuffer.bestOverallCandidate;
+        // If a clean, unobstructed frontal frame is available, link it to the autonomous engine.
+        const bestCand = this.historyBuffer.bestOverallSnapshot;
         if (bestCand && bestCand.landmarks) {
           this.autonomousEngine.setBaseLandmarks(bestCand.landmarks);
         }
@@ -1203,6 +1361,11 @@ class App {
 
         // Auto-calibrator updates
         this.autoCalibrator.update(rawTracking, now);
+
+        // Capture only fresh MediaPipe motion frames. No audio stream is ever requested.
+        if (this.presetRecorder.isRecording) {
+          this.presetRecorder.capture(rawTracking, now);
+        }
 
         // Process with ExpressionLooper
         const ar = (this.videoEl.videoWidth || 1280) / (this.videoEl.videoHeight || 720);
@@ -1258,15 +1421,12 @@ class App {
         this.consecutiveDetectedFrames = 0;
 
         // Transition to AUTONOMOUS mode IMMEDIATELY when face tracking drops (Zero freeze!)
-        if (this.autonomousEngine.hasSeenFace || this.forceAutonomousMode) {
+        if (this.canUseAutonomous()
+          && (this.appState === 'AUTONOMOUS' || this.applyBestTextureReference(now))) {
           if (this.appState !== 'AUTONOMOUS') {
             this.setState('AUTONOMOUS');
-            this.hasTakenSnapshotForVisitor = false;
             this.isBlendingToLive = false;
             this.autoExitLandmarks = null;
-
-            // Freeze the single BEST centered, motionless, frontal, unobstructed screenshot as texture reference
-            this.applyBestTextureReference(now);
 
             // Start autonomous mode with smooth quintic S-curve glide from last tracking pose into center
             this.autonomousEngine.startAutonomous(
@@ -1283,15 +1443,6 @@ class App {
             this.lastRenderedTrackingResult = autoFrame;
             this.renderer.render(autoFrame);
 
-            // Update app-state-label if random recorded animation is playing (50%)
-            const stateLabelEl = document.getElementById('app-state-label');
-            if (stateLabelEl && this.appState === 'AUTONOMOUS') {
-              if (autoFrame.activeAnimationName && autoFrame.animBlendWeight > 0.05) {
-                stateLabelEl.textContent = `AUTO // ${autoFrame.activeAnimationName.toUpperCase()} (50%)`;
-              } else {
-                stateLabelEl.textContent = 'AUTONOME';
-              }
-            }
           }
 
           if (statLatency) statLatency.textContent = `0ms`;
@@ -1306,23 +1457,14 @@ class App {
         }
       }
 
-      // 3. Update Timeline Scrubber
-      if (this.looper.isRecording) {
-        const elapsedSec = (now - this.looper.recordingStartTime) / 1000;
-        timeCurrent.textContent = `${elapsedSec.toFixed(1)}s`;
-        timeTotal.textContent = `REC...`;
-        progressEl.style.width = '100%';
-      } else if (this.looper.isPlaying && this.looper.loopDurationMs > 0) {
-        const elapsed = (now - this.looper.playbackStartTime) * this.looper.playbackSpeed;
-        const currentMs = elapsed % this.looper.loopDurationMs;
-        const totalSec = this.looper.loopDurationMs / 1000;
-        const currentSec = currentMs / 1000;
-        timeCurrent.textContent = `${currentSec.toFixed(1)}s`;
-        timeTotal.textContent = `${totalSec.toFixed(1)}s`;
-        progressEl.style.width = `${(currentMs / this.looper.loopDurationMs) * 100}%`;
+      this.updateAnimationPlaybackUI();
+      this.updateMotionPresetRecorderUI(now);
+
+      if (this.presetRecorder.isRecording && this.presetRecorder.getElapsedMs(now) >= this.presetRecorder.maxDurationMs) {
+        this.stopAndSavePresetRecording();
       }
 
-      // 4. Calculate FPS
+      // 3. Calculate FPS
       this.fpsCounter++;
       if (now - this.lastFpsTime >= 500) {
         this.currentFps = Math.round((this.fpsCounter * 1000) / (now - this.lastFpsTime));
@@ -1342,71 +1484,105 @@ class App {
    * for both the 3D mask and the background plane in autonomous mode.
    */
   applyBestTextureReference(now = performance.now(), minAgeMs = 1500) {
+    if (!this.canUseAutonomous()) return false;
     const backupFrame = this.historyBuffer.getBestVisitorBackupFrame(now, minAgeMs);
-    if (backupFrame && backupFrame.canvas && backupFrame.landmarks) {
+    if (backupFrame && !backupFrame.isArchived && backupFrame.canvas && backupFrame.landmarks) {
       const ageStr = (now - backupFrame.timestamp).toFixed(0);
       console.log(`[FaceTextureHistoryBuffer] 🎭 Texture autonome de référence appliquée (Âge: ${ageStr}ms, Score: ${Math.round(backupFrame.qualityScore)})`);
       this.renderer.freezeFaceTexture(backupFrame.canvas, backupFrame.landmarks);
       this.autonomousEngine.setBaseLandmarks(backupFrame.landmarks);
       return true;
-    } else if (this.autonomousEngine.baseLandmarks && this.renderer.isTextureFrozen) {
-      return true;
-    } else if (this.lastTrackingLandmarks && this.videoEl && this.videoEl.readyState >= 2) {
-      this.renderer.freezeFaceTexture(this.videoEl, this.lastTrackingLandmarks);
-      this.autonomousEngine.setBaseLandmarks(this.lastTrackingLandmarks);
-      return true;
     }
     return false;
   }
 
+  canUseAutonomous() {
+    return this.historyBuffer.hasCurrentVisitorSnapshot();
+  }
+
+  updateAutonomousAvailability(force = false) {
+    const available = this.canUseAutonomous();
+    if (!available) {
+      this.forceAutonomousMode = false;
+      document.getElementById('btn-toggle-autonomous')?.classList.remove('active');
+      if (this.appState === 'AUTONOMOUS') {
+        this.isBlendingToLive = false;
+        this.autoExitLandmarks = null;
+        this.renderer.unfreezeFaceTexture();
+        this.setState('WAITING');
+      }
+    }
+    if (!force && available === this.lastAutonomousAvailable) return;
+    this.lastAutonomousAvailable = available;
+    const button = document.getElementById('btn-toggle-autonomous');
+    if (button) {
+      button.disabled = !available;
+      button.title = available ? 'Activer / Forcer le mode autonome (A)' : 'Mémorisez un cliché FaceMesh pour activer le mode autonome';
+    }
+    const runButton = document.getElementById('btn-run-comfy');
+    if (runButton) {
+      runButton.disabled = !available;
+      runButton.title = available ? 'Exécuter le workflow ComfyUI' : 'Mémorisez un cliché FaceMesh avant de lancer ComfyUI';
+    }
+    for (const button of document.querySelectorAll('.anim-btn-test')) button.disabled = !available;
+  }
+
+  handleVisitorSnapshotReady() {
+    this.updateAutonomousAvailability();
+    this.tryRunComfyForVisitor();
+  }
+
   /**
-   * Called whenever a pristine, centered, still, frontal screenshot is captured
+   * Called whenever a pristine, centered, still, frontal reference is captured in memory.
    */
   handlePristineCapture(detail = {}) {
-    const { canvas, landmarks, score, dataUrl } = detail;
+    const { landmarks, score } = detail;
     console.log(`[FaceTextureHistoryBuffer] 🌟 Meilleure référence faciale capturée ! (Score: ${Math.round(score)})`);
     if (landmarks) {
       this.autonomousEngine.setBaseLandmarks(landmarks);
-    }
-    if (this.autoSnapshotEnabled && dataUrl) {
-      const now = new Date();
-      const timeStr = now.toLocaleTimeString();
-      const snapshotObj = {
-        id: Date.now(),
-        dataUrl,
-        timeStr,
-        width: canvas?.width || (this.videoEl.videoWidth || 1280),
-        height: canvas?.height || (this.videoEl.videoHeight || 720),
-        isPristine: true
-      };
-      this.latestSnapshot = snapshotObj;
-      this.recentSnapshots.push(snapshotObj);
-      this.showSnapshotToast(dataUrl, timeStr);
+      this.showNotification(this.hasVisitorSnapshot
+        ? 'Meilleur cliché FaceMesh mémorisé'
+        : 'Cliché FaceMesh mémorisé', 'success', 5000, 'facemesh-capture');
+      this.hasVisitorSnapshot = true;
+      this.handleVisitorSnapshotReady();
     }
   }
 
+  updateVisitorIdUI() {
+    const button = document.getElementById('btn-copy-visitor-id');
+    const label = document.getElementById('current-visitor-id');
+    if (!button || !label) return;
+    const id = this.currentVisitorId;
+    label.textContent = id ? id.slice(0, 8) : 'En attente';
+    button.disabled = !id;
+    button.title = id ? `ID de session : ${id} — cliquer pour copier` : 'Aucun visiteur identifié';
+    button.setAttribute('aria-label', id ? `Copier l’identifiant du visiteur : ${id}` : 'Aucun visiteur identifié');
+  }
+
   handleNewVisitor(detail = {}) {
-    const now = performance.now();
+    // A new session gets a random ID; tracking loss and autonomous playback keep it.
+    this.currentVisitorId = typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+    this.updateVisitorIdUI();
     const reason = detail.reason || 'BIOMETRIC_CHANGE';
     const dissimStr = detail.dissimilarity !== undefined ? detail.dissimilarity.toFixed(3) : 'N/A';
-    console.log(`[VisitorDetector] 👤 Nouveau visiteur détecté ! (Raison: ${reason}, Dissimilarité: ${dissimStr})`);
+    console.log(`[VisitorDetector] 👤 Visiteur ${this.currentVisitorId} (Raison: ${reason}, Dissimilarité: ${dissimStr})`);
 
-    this.hasTakenSnapshotForVisitor = true;
-    this.lastSnapshotTimestamp = now;
     this.setState('NEW_PERSON');
 
-    // Start WebRTC stream transmission & broadcast alert to second computers
+    // Notify connected displays without creating or persisting an image.
     if (this.canvasBroadcaster) {
-      this.canvasBroadcaster.notifyNewVisitor(detail);
+      this.canvasBroadcaster.notifyNewVisitor({ ...detail, visitorId: this.currentVisitorId });
     }
 
     // Reset best visitor backup texture tracker for this new visitor session
     this.historyBuffer.resetVisitorSession();
+    this.hasVisitorSnapshot = false;
+    this.updateAutonomousAvailability();
 
-    // Automatically take webcam snapshot of the new person
-    if (this.autoSnapshotEnabled) {
-      this.captureWebcamSnapshot();
-    }
+    // Give the visitor one second to settle before starting the ComfyUI workflow.
+    this.scheduleComfyWorkflowForVisitor();
 
     // Return state to LIVE after 1.8s
     setTimeout(() => {
@@ -1416,8 +1592,53 @@ class App {
     }, 1800);
   }
 
+  updateBroadcastBackground() {
+    this.canvasBroadcaster?.setLiveBackgroundEnabled(!this.minimalistMode && !this.bustModeEnabled && this.appState !== 'AUTONOMOUS');
+  }
+
+  setMinimalistMode(enabled) {
+    this.minimalistMode = !!enabled;
+    this.renderer.setMinimalistMode(this.minimalistMode);
+    document.body.classList.toggle('minimalist-mode', this.minimalistMode);
+    const button = document.getElementById('btn-toggle-minimalist');
+    button?.classList.toggle('active', this.minimalistMode);
+    button?.setAttribute('aria-pressed', String(this.minimalistMode));
+    const bustButton = document.getElementById('btn-toggle-bust');
+    if (bustButton) bustButton.disabled = this.minimalistMode;
+    this.setBustMode(this.bustModeRequested);
+    if (this.lastRenderedTrackingResult?.detected) this.renderer.render(this.lastRenderedTrackingResult);
+    this.canvasBroadcaster?.drawBroadcastFrame();
+  }
+
+  setBustMode(enabled, notify = false) {
+    this.bustModeRequested = !!enabled;
+    this.bustModeEnabled = this.bustModeRequested && !this.minimalistMode;
+    this.renderer.setShowBust(this.bustModeEnabled);
+    this.faceMeshAlignmentControls?.sync();
+    document.body.classList.toggle('bust-only-mode', this.bustModeEnabled);
+    this.updateBroadcastBackground();
+    const button = document.getElementById('btn-toggle-bust');
+    button?.classList.toggle('active', this.bustModeEnabled);
+    button?.setAttribute('aria-pressed', String(this.bustModeEnabled));
+    if (notify) {
+      this.showNotification(this.bustModeEnabled ? 'Mode Buste 3D activé' : 'Mode Buste 3D désactivé',
+        this.bustModeEnabled ? 'success' : '');
+    }
+  }
+
   setState(newState) {
+    if (newState === 'AUTONOMOUS' && !this.canUseAutonomous()) {
+      this.forceAutonomousMode = false;
+      return;
+    }
+    const wasAutonomous = this.appState === 'AUTONOMOUS';
     this.appState = newState;
+    if (wasAutonomous && newState !== 'AUTONOMOUS') this.autonomousEngine.stopAutonomous();
+    if (wasAutonomous !== (newState === 'AUTONOMOUS')) {
+      this.setBustMode(newState === 'AUTONOMOUS');
+    }
+    this.updateBroadcastBackground();
+    this.updateAnimationPlaybackUI();
     document.body.classList.toggle('state-autonomous', newState === 'AUTONOMOUS');
     const statContainer = document.getElementById('state-stat-container');
     const stateLabel = document.getElementById('app-state-label');
@@ -1447,159 +1668,6 @@ class App {
     }
   }
 
-  triggerShutterFlash() {
-    const flashEl = document.getElementById('camera-flash');
-    if (!flashEl) return;
-    flashEl.classList.remove('flash-active');
-    void flashEl.offsetWidth; // Force reflow
-    flashEl.classList.add('flash-active');
-    setTimeout(() => {
-      flashEl.classList.remove('flash-active');
-    }, 45);
-  }
-
-  playShutterSound() {
-    try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (!AudioCtx) return;
-      const ctx = new AudioCtx();
-      const now = ctx.currentTime;
-
-      // 1. Mechanical click (two short damped impulses)
-      const osc = ctx.createOscillator();
-      const oscGain = ctx.createGain();
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(320, now);
-      osc.frequency.exponentialRampToValueAtTime(40, now + 0.04);
-      oscGain.gain.setValueAtTime(0.35, now);
-      oscGain.gain.exponentialRampToValueAtTime(0.001, now + 0.045);
-      osc.connect(oscGain);
-      oscGain.connect(ctx.destination);
-      osc.start(now);
-      osc.stop(now + 0.05);
-
-      // 2. High-pass shutter noise burst
-      const bufferSize = ctx.sampleRate * 0.05;
-      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-      const data = buffer.getChannelData(0);
-      for (let i = 0; i < bufferSize; i++) {
-        data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.015));
-      }
-      const noise = ctx.createBufferSource();
-      noise.buffer = buffer;
-      const filter = ctx.createBiquadFilter();
-      filter.type = 'highpass';
-      filter.frequency.value = 2400;
-      const noiseGain = ctx.createGain();
-      noiseGain.gain.setValueAtTime(0.28, now + 0.01);
-      noiseGain.gain.exponentialRampToValueAtTime(0.001, now + 0.055);
-      noise.connect(filter);
-      filter.connect(noiseGain);
-      noiseGain.connect(ctx.destination);
-      noise.start(now + 0.01);
-      noise.stop(now + 0.06);
-    } catch (e) {
-      // AudioContext policy
-    }
-  }
-
-  showSnapshotToast(dataUrl, timeStr) {
-    const toast = document.getElementById('snapshot-toast');
-    const toastImg = document.getElementById('snapshot-toast-img');
-    const toastTime = document.getElementById('snapshot-toast-time');
-    if (!toast || !toastImg) return;
-
-    toastImg.src = dataUrl;
-    if (toastTime) toastTime.textContent = timeStr;
-    toast.classList.remove('hidden');
-
-    if (this.toastTimeout) clearTimeout(this.toastTimeout);
-    this.toastTimeout = setTimeout(() => {
-      toast.classList.add('hidden');
-    }, 6000);
-  }
-
-  downloadSnapshot(dataUrl, filename) {
-    const a = document.createElement('a');
-    a.href = dataUrl;
-    a.download = filename || `webcam_snapshot_${Date.now()}.jpg`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  }
-
-  captureWebcamSnapshot() {
-    if (!this.videoEl || this.videoEl.readyState < 2) return null;
-    const vw = this.videoEl.videoWidth || 1280;
-    const vh = this.videoEl.videoHeight || 720;
-
-    const snapCanvas = document.createElement('canvas');
-    snapCanvas.width = vw;
-    snapCanvas.height = vh;
-    const ctx = snapCanvas.getContext('2d');
-
-    if (this.isMirrored) {
-      ctx.translate(vw, 0);
-      ctx.scale(-1, 1);
-    }
-    ctx.drawImage(this.videoEl, 0, 0, vw, vh);
-
-    const dataUrl = snapCanvas.toDataURL('image/jpeg', 0.92);
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString();
-
-    const snapshotObj = {
-      id: Date.now(),
-      dataUrl,
-      timeStr,
-      width: vw,
-      height: vh
-    };
-
-    this.latestSnapshot = snapshotObj;
-    this.recentSnapshots.push(snapshotObj);
-
-    // Floating UI toast notification (Silent and seamless - zero white flash)
-    this.showSnapshotToast(dataUrl, timeStr);
-
-    return snapshotObj;
-  }
-
-  /**
-   * Capture Snapshot Image (Composite or Direct)
-   */
-  captureSnapshot() {
-    const snapCanvas = document.createElement('canvas');
-    snapCanvas.width = this.videoEl.videoWidth || 1280;
-    snapCanvas.height = this.videoEl.videoHeight || 720;
-    const ctx = snapCanvas.getContext('2d');
-
-    ctx.fillStyle = this.showWebcam ? '#000000' : '#ffffff';
-    ctx.fillRect(0, 0, snapCanvas.width, snapCanvas.height);
-
-    if (this.showWebcam) {
-      ctx.save();
-      if (this.isMirrored) {
-        ctx.translate(snapCanvas.width, 0);
-        ctx.scale(-1, 1);
-      }
-      ctx.drawImage(this.videoEl, 0, 0, snapCanvas.width, snapCanvas.height);
-      ctx.restore();
-    }
-
-    ctx.drawImage(this.canvasEl, 0, 0, snapCanvas.width, snapCanvas.height);
-
-    snapCanvas.toBlob((blob) => {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `facemesh_capture_${Date.now()}.png`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }, 'image/png');
-  }
 }
 
 window.addEventListener('DOMContentLoaded', () => {

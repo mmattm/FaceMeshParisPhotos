@@ -3,6 +3,7 @@ import https from 'node:https';
 import { WebSocketServer } from 'ws';
 import { KokoroTTS } from 'kokoro-js';
 import { encodeWAV } from './src/tts/wavEncoder.js';
+import { audioLibraryPlugin } from './src/server/audioLibraryPlugin.js';
 
 let kokoroTTSInstance = null;
 async function getKokoro() {
@@ -336,8 +337,137 @@ function webrtcSignalingPlugin() {
   };
 }
 
+function comfyUiServerPlugin() {
+  const workflowDir = path.resolve(process.cwd(), 'comfyWorkflow');
+  if (!fs.existsSync(workflowDir)) fs.mkdirSync(workflowDir, { recursive: true });
+
+  const getWorkflowFiles = () => fs.readdirSync(workflowDir)
+    .filter(file => file.toLowerCase().endsWith('.json'))
+    .sort((a, b) => a.localeCompare(b));
+
+  const normalizeBaseUrl = (rawValue) => {
+    let value = String(rawValue || '').trim();
+    if (!value) throw new Error('Adresse ComfyUI manquante');
+    if (!/^https?:\/\//i.test(value)) value = `http://${value}`;
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Protocole ComfyUI invalide');
+    if (url.username || url.password) throw new Error("L'adresse ComfyUI ne doit pas contenir d'identifiants");
+    return url.toString().replace(/\/$/, '');
+  };
+
+  const readJsonBody = (req) => new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', chunk => {
+      size += chunk.length;
+      if (size > 1024 * 1024) {
+        reject(new Error('Requête trop volumineuse'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      try {
+        resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf-8')) : {});
+      } catch (error) {
+        reject(new Error(`JSON invalide: ${error.message}`));
+      }
+    });
+    req.on('error', reject);
+  });
+
+  const comfyFetch = async (url, options = {}) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+      return await fetch(url, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
+  const installMiddleware = (server) => {
+    server.middlewares.use(async (req, res, next) => {
+      if (!req.url.startsWith('/api/comfy')) return next();
+      res.setHeader('Content-Type', 'application/json');
+
+      try {
+        const requestUrl = new URL(req.url, 'http://localhost');
+        if (req.method === 'GET' && requestUrl.pathname === '/api/comfy/workflows') {
+          res.statusCode = 200;
+          res.end(JSON.stringify({ workflows: getWorkflowFiles() }));
+          return;
+        }
+
+        if (req.method === 'POST' && requestUrl.pathname === '/api/comfy/test') {
+          const body = await readJsonBody(req);
+          const baseUrl = normalizeBaseUrl(body.baseUrl);
+          const response = await comfyFetch(`${baseUrl}/system_stats`);
+          if (!response.ok) throw new Error(`ComfyUI répond ${response.status}`);
+          res.statusCode = 200;
+          res.end(JSON.stringify({ success: true, baseUrl }));
+          return;
+        }
+
+        if (req.method === 'POST' && requestUrl.pathname === '/api/comfy/queue') {
+          const body = await readJsonBody(req);
+          const baseUrl = normalizeBaseUrl(body.baseUrl);
+          const workflows = getWorkflowFiles();
+          const requested = body.workflowFilename ? path.basename(body.workflowFilename) : workflows[0];
+          if (!requested || !workflows.includes(requested)) {
+            throw new Error('Aucun workflow JSON valide trouvé dans comfyWorkflow/');
+          }
+
+          const stored = JSON.parse(fs.readFileSync(path.join(workflowDir, requested), 'utf-8'));
+          const prompt = stored.prompt && typeof stored.prompt === 'object'
+            ? stored.prompt
+            : stored.workflow && typeof stored.workflow === 'object'
+              ? stored.workflow
+              : stored;
+          const clientId = `photomaton_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          const response = await comfyFetch(`${baseUrl}/prompt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt, client_id: clientId })
+          });
+          const responseText = await response.text();
+          let result = {};
+          try { result = responseText ? JSON.parse(responseText) : {}; } catch (error) {}
+          if (!response.ok) {
+            const detail = result.error?.message || result.error || responseText || `HTTP ${response.status}`;
+            throw new Error(`ComfyUI: ${String(detail).slice(0, 500)}`);
+          }
+
+          res.statusCode = 200;
+          res.end(JSON.stringify({
+            success: true,
+            workflowFilename: requested,
+            promptId: result.prompt_id || null,
+            number: result.number ?? null
+          }));
+          return;
+        }
+
+        res.statusCode = 404;
+        res.end(JSON.stringify({ error: 'Route ComfyUI inconnue' }));
+      } catch (error) {
+        const message = error.name === 'AbortError' ? 'ComfyUI ne répond pas (timeout 10s)' : error.message;
+        res.statusCode = 500;
+        res.end(JSON.stringify({ error: message }));
+      }
+    });
+  };
+
+  return {
+    name: 'comfyui-server-plugin',
+    configureServer: installMiddleware,
+    configurePreviewServer: installMiddleware
+  };
+}
+
 export default defineConfig({
-  plugins: [ttsServerPlugin(), animationsServerPlugin(), webrtcSignalingPlugin()],
+  plugins: [ttsServerPlugin(), animationsServerPlugin(), webrtcSignalingPlugin(), comfyUiServerPlugin(), audioLibraryPlugin()],
   server: {
     port: 5173,
     host: true
