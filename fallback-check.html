@@ -1,0 +1,27 @@
+<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:#eae7e2}canvas{width:100vw;height:100vh;object-fit:cover}pre{position:fixed;top:0;background:white;color:black;font:14px monospace;z-index:5}</style></head><body><canvas id="scene" width="1280" height="720"></canvas><pre id="result">RUNNING</pre><script type="module">
+import { FaceTracker } from '/src/core/tracker.js';
+import { FaceMeshRenderer } from '/src/core/renderer.js';
+import { AutonomousGazeEngine } from '/src/core/autonomousGazeEngine.js';
+import { createFallbackFaceLandmarks } from '/src/core/fallbackFace.js';
+try {
+  const tracker = new FaceTracker({smoothing:false});
+  await tracker.init();
+  const renderer = new FaceMeshRenderer(document.querySelector('#scene'));
+  renderer.resize(1280,720,1);
+  await renderer.loadFallbackFaceTexture(tracker);
+  renderer.setAutonomousFallback(true);
+  renderer.setShowBust(true);
+  renderer.renderer.setClearColor(0xeae7e2,1);
+  const engine = new AutonomousGazeEngine();
+  engine.setBaseLandmarks(createFallbackFaceLandmarks(16/9));
+  engine.startAutonomous(1000);
+  await renderer.bustOverlay.loading.get(renderer.bustOverlay.selectedModel);
+  let frame;
+  for(let i=0;i<90;i++) frame = engine.generateFrame(1000+i*16.67,1280,720);
+  renderer.render(frame);
+  const output = document.createElement('canvas'); output.width=1080;output.height=1080;
+  output.getContext('2d').drawImage(renderer.canvas,280,0,720,720,0,0,1080,1080);
+  const detected = tracker.detectReferenceLandmarks(output);
+  document.querySelector('#result').textContent=JSON.stringify({textureLandmarks:renderer.fallbackTextureLandmarks.length,outputDetected:!!detected,outputLandmarks:detected?.length,bustLoaded:renderer.bustOverlay.models.size,wireframe:renderer.fallbackFaceMaterial.wireframe});
+} catch(error) {document.querySelector('#result').textContent='ERROR: '+error.stack;}
+</script></body></html>

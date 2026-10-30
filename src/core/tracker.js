@@ -193,6 +193,14 @@ export class FaceTracker {
    * Process a single video or canvas frame from an external source (e.g. uploaded video)
    * with strict monotonically increasing timestamp enforcement for MediaPipe.
    */
+  detectReferenceLandmarks(image) {
+    if (!this.isReady || !this.faceLandmarker) return null;
+    // Read only the raw model output, without changing the live smoothing filters.
+    this.lastInferenceTime = Math.max(performance.now(), (this.lastInferenceTime || 0) + 1);
+    const results = this.faceLandmarker.detectForVideo(image, this.lastInferenceTime);
+    return results.faceLandmarks?.[0] || null;
+  }
+
   processExternalFrame(element, timestampMs = 0) {
     if (!this.isReady || !this.faceLandmarker || !element) {
       return null;

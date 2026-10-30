@@ -6,10 +6,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SoftPhotography - Photobooth</title>
   <meta name="description"
-    content="Studio-grade Anatomical Lip-Sync & Neural Voice Synthesis with real-time head retargeting">
-  <script type="module" crossorigin src="/assets/main-ChGY4oqk.js"></script>
+    content="Studio-grade Anatomical Lip-Sync & Neural Voice Synthesis with real-time head retargeting">
+  <script type="module" crossorigin src="/assets/main-UZo3iYFd.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/modulepreload-polyfill-B5Qt9EMX.js">
-  <link rel="stylesheet" crossorigin href="/assets/main-BLqI_aBP.css">
+  <link rel="stylesheet" crossorigin href="/assets/main-D1JHOFX9.css">
 </head>
 
 <body class="show-webcam show-texture">
@@ -93,6 +93,18 @@
           </div>
         </div>
 
+        <div class="motion-preset-recorder" aria-label="Enregistrement d'un preset de mouvement sans audio">
+          <input id="motion-preset-name" class="motion-preset-name" type="text" maxlength="80"
+            placeholder="Nom du preset (optionnel)" aria-label="Nom du nouveau preset">
+          <button id="btn-record-motion-preset" class="tool-btn motion-preset-button" type="button"
+            aria-pressed="false" title="Enregistrer uniquement les mouvements du visage et de la tête, sans audio">
+            <span>● Enregistrer un preset</span>
+          </button>
+          <span id="motion-preset-status" class="motion-preset-status" role="status" aria-live="polite">
+            Commencez visage neutre · sans audio
+          </span>
+        </div>
+
         <div class="anim-list-header">
           <span>Animations dans public/animations/</span>
           <span id="anim-list-count-label">0 animation</span>
@@ -125,15 +137,14 @@
           <button id="btn-close-audio-library" class="tool-btn" type="button" aria-label="Fermer la bibliothèque audio">✕</button>
         </div>
         <div class="anim-lib-banner">
-          <p class="anim-lib-desc">Choisissez une piste pour les presets ou alternez toute la bibliothèque. Le bouton Écouter permet une préécoute.</p>
+          <p class="anim-lib-desc">Toutes les pistes sont utilisées en lecture aléatoire. Le bouton Écouter permet une préécoute.</p>
           <div class="audio-library-options">
-            <button id="btn-audio-library-all" class="tool-btn" type="button">Alterner toutes les pistes</button>
             <button id="btn-audio-library-toggle" class="tool-btn" type="button">Activer l’audio</button>
           </div>
           <div class="audio-delay-control">
             <label for="audio-delay-ms">Délai du son après les lèvres</label>
             <div class="audio-delay-row">
-              <input id="audio-delay-ms" class="blend-slider" type="range" min="0" max="2000" step="10" value="0">
+              <input id="audio-delay-ms" class="blend-slider" type="range" min="0" max="3000" step="10" value="0">
               <output id="audio-delay-value" for="audio-delay-ms">0 ms</output>
               <button id="btn-reset-audio-delay" class="tool-btn" type="button" aria-label="Remettre le délai audio à zéro" title="Remettre à 0 ms">↺</button>
             </div>
@@ -184,9 +195,10 @@
 
     <aside class="webrtc-preview-card" aria-label="Aperçu de la sortie vidéo WebRTC">
       <div class="webrtc-preview-header">
-        <span><span class="webrtc-preview-live-dot"></span> WEBRTC OUT</span>
+        <span><span class="webrtc-preview-live-dot"></span> VIDEO OUT</span>
         <span id="webrtc-preview-meta">1080×1080 · 30 FPS</span>
       </div>
+      <p style="font-size:12px; padding:8px 12px; overflow-wrap:anywhere">Source Navigateur OBS ? 1080 ? 1080 ? 30 FPS<br><code>/receiver.html?output=obs</code></p>
       <div id="webrtc-preview-slot" class="webrtc-preview-slot"></div>
       <div class="webrtc-preview-status webrtc-stat" id="webrtc-status-badge">
         <span class="state-indicator-dot" id="webrtc-dot"></span>
@@ -234,6 +246,7 @@
       </div>
 
       <div class="align-panel-body">
+        <p id="align-profile-label" role="status">Profil : Live</p>
         <!-- Déplacement Position X / Y -->
         <div class="align-section">
           <div class="align-section-header">
@@ -376,17 +389,6 @@
     <footer class="bottom-panel">
       <!-- Motion-only preset recorder -->
       <div class="looper-card">
-        <div class="motion-preset-recorder" aria-label="Enregistrement d'un preset de mouvement sans audio">
-          <input id="motion-preset-name" class="motion-preset-name" type="text" maxlength="80"
-            placeholder="Nom du preset (optionnel)" aria-label="Nom du nouveau preset">
-          <button id="btn-record-motion-preset" class="tool-btn motion-preset-button" type="button"
-            aria-pressed="false" title="Enregistrer uniquement les mouvements du visage et de la tête, sans audio">
-            <span>● Enregistrer un preset</span>
-          </button>
-          <span id="motion-preset-status" class="motion-preset-status" role="status" aria-live="polite">
-            Commencez visage neutre · sans audio
-          </span>
-        </div>
         <div class="simple-settings-row">
           <label class="blend-control" for="slider-expression-intensity" title="Intensité des sourcils, du regard et du sourire pendant les presets">
             <span>Expressions</span>
@@ -394,16 +396,31 @@
             <span id="expression-intensity-value">160%</span>
           </label>
           <div class="blend-control"
-            title="Sensibilité de détection d'un nouveau visiteur (10% à 100%, défaut: 50%)">
-            <span>Sensibilité Visiteur:</span>
-            <input type="range" id="slider-visitor-sensitivity" class="blend-slider" min="10" max="100" value="50"
+            title="Une nouvelle visite démarre au retour après cette durée sans visage (défaut : 3 secondes)">
+            <span>Absence visiteur:</span>
+            <input type="range" id="slider-visitor-absence" class="blend-slider" min="1" max="10" value="3"
               style="width: 65px;">
-            <span id="visitor-sensitivity-val-label" style="min-width: 28px;">50%</span>
+            <span id="visitor-absence-val-label" style="min-width: 28px;">3 s</span>
           </div>
+          <details class="osc-dropdown">
+            <summary class="tool-btn">OSC</summary>
+            <div class="osc-dropdown-menu">
+          <button id="btn-test-osc" class="tool-btn" type="button" data-osc-signal="newVisitor"
+            title="Envoyer uniquement /newVisitor 1 en OSC vers PC 2, port 9000">
+            OSC · New Visitor
+          </button>
+          <button id="btn-test-osc-generation" class="tool-btn" type="button" data-osc-signal="generationDone"
+            title="Envoyer uniquement /generationDone 1 en OSC vers PC 2, port 9000">
+            OSC · Generation Done
+          </button>
+            </div>
+          </details>
+          <div class="visitor-test-row">
           <button id="btn-debug-new-visitor" class="tool-btn debug-visitor-btn" type="button"
             title="Simuler un nouveau visiteur : nouvelle capture FaceMesh et appel ComfyUI après 1 seconde si activé">
             ↻ Test visiteur
           </button>
+          </div>
         </div>
       </div>
 
@@ -417,17 +434,17 @@
         <div class="divider-vert"></div>
 
         <!-- Autonomous Mode Toggle -->
+        <button id="btn-toggle-face-texture" class="tool-btn" type="button" aria-pressed="true" disabled
+          title="Basculer entre la texture webcam et le cliché FaceMesh pendant le suivi Live">
+          Texture : FaceMesh
+        </button>
+
         <button id="btn-toggle-autonomous" class="tool-btn" disabled
           title="Activer / Forcer le mode autonome avec regard doux et saccades (A)">
           <span>🤖 Autonome</span>
         </button>
 
         <div class="divider-vert"></div>
-
-        <button id="btn-toggle-bust" class="tool-btn" type="button" aria-pressed="false"
-          title="Afficher la tête, le cou et les épaules en 3D derrière le masque photo">
-          <span>🗿 Buste 3D</span>
-        </button>
 
         <button id="btn-toggle-minimalist" class="tool-btn" type="button" aria-pressed="false"
           title="Points blancs du FaceMesh sur fond noir, sans image caméra ni buste, également en WebRTC">
@@ -451,7 +468,7 @@
       </div>
     </footer>
   </div>
-
+
 </body>
 
 </html>

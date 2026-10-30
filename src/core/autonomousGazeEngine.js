@@ -21,7 +21,7 @@
 import * as THREE from 'three';
 import { CranialCoordinateSystem } from '../mocap/cranialCoordinateSystem.js';
 import { PresetAudioLipSync } from '../audio/presetAudioLipSync.js';
-import { deformMouth } from '../mocap/mouthDeformer.js';
+import { deformMouth, closeRestingMouth } from '../mocap/mouthDeformer.js';
 
 // Keep the face centered while allowing a little movement in depth.
 const AUTONOMOUS_LATERAL_TRANSLATION_SCALE = 0;
@@ -274,21 +274,23 @@ export class AutonomousGazeEngine extends EventTarget {
     const context = enabled ? this.ensureAudioContext() : this.audioCtx;
     await this.presetAudio.setEnabled(enabled, context, this.audioGainNode);
     if (enabled && this.presetAudio.enabled && this.isActive) {
-      this.nextAudioStartTime = performance.now();
-      this.updatePresetAudioPlayback(this.nextAudioStartTime);
+      this.scheduleNextPresetAudio(performance.now());
     }
   }
 
   async setPresetAudioTracks(urls) {
     await this.presetAudio.setTracks(urls);
     if (this.isActive && this.presetAudio.enabled && !this.presetAudio.durationMs) {
-      this.nextAudioStartTime = performance.now();
-      this.updatePresetAudioPlayback(this.nextAudioStartTime);
+      this.scheduleNextPresetAudio(performance.now());
     }
   }
 
   getAnimationElapsed(now) {
     return now - this.animStartTime;
+  }
+
+  scheduleNextPresetAudio(now) {
+    this.nextAudioStartTime = now + 10000 + Math.random() * 5000;
   }
 
   updatePresetAudioPlayback(now) {
@@ -298,9 +300,12 @@ export class AutonomousGazeEngine extends EventTarget {
     if (audio.durationMs) {
       if (audio.elapsedMs < audio.playbackDurationMs) return;
       audio.stop();
-      this.nextAudioStartTime = now + 3500 + Math.random() * 1500;
-    } else if (now >= this.nextAudioStartTime && !audio.play()) {
-      this.nextAudioStartTime = now + 500;
+      this.scheduleNextPresetAudio(now);
+    } else if (now >= this.nextAudioStartTime) {
+      const choices = audio.urls.map((url, index) => ({ url, index }))
+        .filter(track => audio.urls.length === 1 || track.url !== audio.url);
+      if (choices.length) audio.nextTrackIndex = choices[Math.floor(Math.random() * choices.length)].index;
+      if (!audio.play()) this.nextAudioStartTime = now + 500;
     }
   }
 
@@ -409,12 +414,12 @@ export class AutonomousGazeEngine extends EventTarget {
   /**
    * Trigger transition into autonomous mode with smooth ease-in glide to center
    */
-  startAutonomous(now = performance.now(), initialLandmarks = null, initialHeadPose = null) {
+  startAutonomous(now = performance.now(), initialLandmarks = null, initialHeadPose = null, transitionDurationMs = 850) {
     this.stopAudio();
     this.isActive = true;
     this.lastRenderedLandmarks = null;
     this.lastPoseLandmarks = null;
-    this.nextAudioStartTime = now;
+    this.scheduleNextPresetAudio(now);
 
     if (initialLandmarks && initialLandmarks.length > 0) {
       this.transFromLandmarks = initialLandmarks.map(p => ({
@@ -425,7 +430,7 @@ export class AutonomousGazeEngine extends EventTarget {
       }));
       this.isTransitioningToAutonomous = true;
       this.transToAutoStartTime = now;
-      this.transToAutoDuration = 850;
+      this.transToAutoDuration = transitionDurationMs;
     } else {
       this.isTransitioningToAutonomous = false;
       this.transFromLandmarks = null;
@@ -733,7 +738,7 @@ export class AutonomousGazeEngine extends EventTarget {
 
       // Friendly subtle micro-smile and receptive expression
       this.targetProceduralExpressions = {
-        jawOpen: 0.02,
+        jawOpen: 0,
         smileL: 0.16 + Math.random() * 0.10,
         smileR: 0.16 + Math.random() * 0.10,
         browL: 0.08,
@@ -766,9 +771,9 @@ export class AutonomousGazeEngine extends EventTarget {
         y: Math.max(-0.35, Math.min(0.35, (angleY / 20.0) * 0.38 + (Math.random() - 0.5) * 0.10))
       };
 
-      // Searching expression: lips softly parted, alert inquisitive brows
+      // Searching expression: closed lips, alert inquisitive brows
       this.targetProceduralExpressions = {
-        jawOpen: 0.09 + Math.random() * 0.06,
+        jawOpen: 0,
         smileL: 0.04,
         smileR: 0.04,
         browL: 0.26 + Math.random() * 0.15,
@@ -799,9 +804,9 @@ export class AutonomousGazeEngine extends EventTarget {
         y: Math.max(-0.28, Math.min(0.32, (angleY / 18.0) * 0.35))
       };
 
-      // Exaggerated asymmetric curiosity: one brow high, curious corner smirk, parted jaw
+      // Exaggerated asymmetric curiosity: one brow high, curious corner smirk, closed jaw
       this.targetProceduralExpressions = {
-        jawOpen: 0.10 + Math.random() * 0.07,
+        jawOpen: 0,
         smileL: side > 0 ? 0.03 : (0.22 + Math.random() * 0.12),
         smileR: side > 0 ? (0.22 + Math.random() * 0.12) : 0.03,
         browL: side > 0 ? 0.15 : (0.45 + Math.random() * 0.18),
@@ -833,7 +838,7 @@ export class AutonomousGazeEngine extends EventTarget {
       };
 
       this.targetProceduralExpressions = {
-        jawOpen: 0.10 + Math.random() * 0.05,
+        jawOpen: 0,
         smileL: 0.05,
         smileR: 0.05,
         browL: 0.35 + Math.random() * 0.15,
@@ -862,9 +867,9 @@ export class AutonomousGazeEngine extends EventTarget {
         y: 0.22 + Math.random() * 0.14
       };
 
-      // Thinking expression: inner eyebrows raised high, lips slightly pursed / open
+      // Thinking expression: inner eyebrows raised high, lips slightly pursed and closed
       this.targetProceduralExpressions = {
-        jawOpen: 0.08 + Math.random() * 0.06,
+        jawOpen: 0,
         smileL: 0.02,
         smileR: 0.02,
         browL: 0.42 + Math.random() * 0.15,
@@ -894,7 +899,7 @@ export class AutonomousGazeEngine extends EventTarget {
       };
 
       this.targetProceduralExpressions = {
-        jawOpen: 0.08 + Math.random() * 0.05,
+        jawOpen: 0,
         smileL: 0.04,
         smileR: 0.04,
         browL: 0.18,
@@ -1142,8 +1147,8 @@ export class AutonomousGazeEngine extends EventTarget {
           : 0.5;
         const lift = Math.max(unit(bs.browInnerUp) * (0.35 + 0.65 * innerWeight), unit(outerUp) * (1.0 - 0.65 * innerWeight));
         const frown = unit(down);
-        point.y += eyeWidth * (frown * (0.115 + 0.09 * innerWeight) - lift * 0.27);
-        point.x += (nose.x - source.x) * frown * (0.040 + 0.070 * innerWeight);
+        point.y += eyeWidth * (frown * (0.15 + 0.11 * innerWeight) - lift * 0.35);
+        point.x += (nose.x - source.x) * frown * (0.050 + 0.085 * innerWeight);
       }
     };
     applyBrow(this.EYEBROW_R, 55, 70, 133, 33, bs.browOuterUpRight, bs.browDownRight);
@@ -1155,8 +1160,8 @@ export class AutonomousGazeEngine extends EventTarget {
         const u = deformed[upper[k]], l = deformed[lower[k]];
         if (!u || !l) continue;
         const gap = Math.max(0, l.y - u.y);
-        u.y -= gap * 0.225 * wide;
-        l.y += gap * 0.09 * wide;
+        u.y -= gap * 0.32 * wide;
+        l.y += gap * 0.12 * wide;
       }
     };
     widenEye(this.EYE_R_UPPER, this.EYE_R_LOWER, unit(bs.eyeWideRight) * (1 - unit(bs.eyeSquintRight)));
@@ -1262,14 +1267,18 @@ export class AutonomousGazeEngine extends EventTarget {
 
     const swayFade = (this.isTransitioningToAutonomous ? transT : 1.0) * procEase;
 
-    const effPitch = this.currentHead.pitch + (breathPitch + rotWigglePitch) * swayFade;
+    // Explore with the head and eyes from a fixed viewpoint. A small pitch
+    // keeps up/down looks readable without exposing an exaggerated underside.
+    const effPitch = Math.max(-8, Math.min(8,
+      this.currentHead.pitch * 0.28 + (breathPitch + rotWigglePitch) * swayFade));
     const effYaw = Math.max(-MAX_AUTONOMOUS_YAW,
       Math.min(MAX_AUTONOMOUS_YAW, this.currentHead.yaw + rotWiggleYaw * swayFade));
     const effRoll = this.currentHead.roll + (breathRoll + rotWiggleRoll) * swayFade;
 
-    const effTransX = this.currentTrans.x + swayX * swayFade * AUTONOMOUS_LATERAL_TRANSLATION_SCALE;
-    const effTransY = this.currentTrans.y + swayY * swayFade * AUTONOMOUS_LATERAL_TRANSLATION_SCALE;
-    const effTransZ = this.currentTrans.z + swayZ * swayFade * AUTONOMOUS_DEPTH_TRANSLATION_SCALE;
+    // Autonomous gaze rotates in place, as a person facing a static webcam.
+    const effTransX = 0;
+    const effTransY = 0;
+    const effTransZ = 0;
 
     // Vestibulo-Ocular Reflex (VOR): Eyes compensate head movements
     const vorCompX = -(effYaw * 0.00075) - (effTransX * 0.70);
@@ -1568,9 +1577,9 @@ export class AutonomousGazeEngine extends EventTarget {
     this.currentProceduralExpressions.browR += (this.targetProceduralExpressions.browR - this.currentProceduralExpressions.browR) * expDamp;
     this.currentProceduralExpressions.pucker += (this.targetProceduralExpressions.pucker - this.currentProceduralExpressions.pucker) * expDamp;
 
-    // Organic breathing modulation in jaw
-    const breathingJaw = Math.max(0, Math.sin(breathCycle) * 0.020);
-    const finalJawOpen = Math.max(0, this.currentProceduralExpressions.jawOpen + breathingJaw);
+    // Keep the resting jaw closed; expressions and audio supply mouth articulation.
+
+    const finalJawOpen = 0;
 
     // Procedural Blendshapes synthesis
     const proceduralBlendshapes = {
@@ -1602,6 +1611,7 @@ export class AutonomousGazeEngine extends EventTarget {
       // Create non-blink version for landmark deformation (blinking is handled smoothly by eyelid points below)
       const bsForDeform = { ...proceduralBlendshapes, eyeBlinkLeft: 0, eyeBlinkRight: 0 };
       procBaseLandmarks = this.applyBlendshapesToLandmarks(this.baseLandmarks, bsForDeform, renderW, renderH);
+      if (!audioMouth) closeRestingMouth(procBaseLandmarks);
     }
 
     const finalBlendshapes = { ...proceduralBlendshapes };
@@ -1713,8 +1723,8 @@ export class AutonomousGazeEngine extends EventTarget {
 
     // Eyelid articulation weights from finalBlendshapes
     const squintGain = 1 + (this.presetExpressionIntensity - 1) * animBlendWeight * 0.8;
-    const curBlinkR = Math.min(1, Math.max(finalBlendshapes.eyeBlinkRight || 0, (finalBlendshapes.eyeSquintRight || 0) * 0.30 * squintGain));
-    const curBlinkL = Math.min(1, Math.max(finalBlendshapes.eyeBlinkLeft || 0, (finalBlendshapes.eyeSquintLeft || 0) * 0.30 * squintGain));
+    const curBlinkR = Math.min(1, Math.max(finalBlendshapes.eyeBlinkRight || 0, (finalBlendshapes.eyeSquintRight || 0) * 0.42 * squintGain));
+    const curBlinkL = Math.min(1, Math.max(finalBlendshapes.eyeBlinkLeft || 0, (finalBlendshapes.eyeSquintLeft || 0) * 0.42 * squintGain));
 
     // Perspective depth scaling: face expands realistically when moving closer, contracts when moving back
     const zDepthScale = Math.max(0.65, Math.min(1.45, 1.0 + finalTransZ * 1.8));
@@ -1819,6 +1829,20 @@ export class AutonomousGazeEngine extends EventTarget {
         };
       }
       outputLandmarks = blended;
+    }
+
+    // Close at rest and during speech pauses, while allowing small audible
+    // articulation. Silent recorded expressions retain their own mouth motion.
+    const speechPause = audioMouth && audioMouth.jawOpen === 0;
+    if ((this.autonomousSubMode === 'PROCEDURAL' && !audioMouth) || speechPause) {
+      closeRestingMouth(outputLandmarks);
+      finalBlendshapes.jawOpen = 0;
+      finalBlendshapes.mouthClose = 1;
+    } else if (audioMouth) {
+      // Ease captured lip gaps closed instead of snapping shut at silence.
+      const opening = Math.min(1, Math.max(0, audioMouth.jawOpen / 0.06));
+      const easing = opening * opening * (3 - 2 * opening);
+      closeRestingMouth(outputLandmarks, 1 - easing);
     }
 
     // Fit the bust and mesh alignment to the rigid head, independently of speech

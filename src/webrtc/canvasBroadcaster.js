@@ -18,6 +18,7 @@ export class CanvasBroadcaster extends EventTarget {
     super();
     this.canvas = canvasElement;
     this.videoElement = options.videoElement || null;
+    this.canvasIncludesVideo = options.canvasIncludesVideo === true;
     this.isMirrored = options.mirrored !== false;
     this.liveBackgroundEnabled = true;
     this.fps = options.fps || 30;
@@ -90,7 +91,7 @@ export class CanvasBroadcaster extends EventTarget {
 
     // In LIVE mode the webcam is an HTML element behind the transparent WebGL
     // canvas, so rebuild that same composition inside the captured canvas.
-    if (this.liveBackgroundEnabled && this.videoElement?.readyState >= 2) {
+    if (!this.canvasIncludesVideo && this.liveBackgroundEnabled && this.videoElement?.readyState >= 2) {
       this.drawVideoCover(this.videoElement, offsetX, offsetY, drawWidth, drawHeight);
     }
 

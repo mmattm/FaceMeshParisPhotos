@@ -14,9 +14,12 @@ import { AutonomousGazeEngine } from './core/autonomousGazeEngine.js';
 import { FaceTextureHistoryBuffer } from './core/faceTextureHistoryBuffer.js';
 import { AnimationLibrary } from './core/animationLibrary.js';
 import { VisitorDetector } from './core/visitorDetector.js';
+import { isFaceInsideOutput, getDepartureBlend } from './core/outputFaceBounds.js';
+import { createFallbackFaceLandmarks } from './core/fallbackFace.js';
 import { CanvasBroadcaster } from './webrtc/canvasBroadcaster.js';
 import { MotionPresetRecorder } from './mocap/motionPresetRecorder.js';
 import { setupFaceMeshAlignmentControls } from './ui/faceMeshAlignmentControls.js';
+import { CameraAlignmentProfiles, ALIGNMENT_PROFILE_LABELS } from './ui/cameraAlignmentProfiles.js';
 import { AudioLibraryControls } from './ui/audioLibraryControls.js';
 
 class App {
@@ -33,6 +36,11 @@ class App {
     this.looper = new ExpressionLooper();
     this.autoCalibrator = new AutoCalibrator(this.looper);
     this.autonomousEngine = new AutonomousGazeEngine();
+    this.departureEngine = new AutonomousGazeEngine();
+    this.fallbackFaceLandmarks = createFallbackFaceLandmarks();
+    // Start in automatic mode: prefer a captured visitor, otherwise use fallback.
+    this.useVisitorPortrait = true;
+    this.preferCapturedTexture = true;
     this.historyBuffer = new FaceTextureHistoryBuffer(24, 150); // Cleanest frontal face capture tracker
     this.historyBuffer.addEventListener('pristine-capture', (e) => this.handlePristineCapture(e.detail));
     this.historyBuffer.addEventListener('fallback-capture', () => {
@@ -41,13 +49,13 @@ class App {
     });
     this.animLibrary = new AnimationLibrary();
     this.autonomousEngine.setAnimationLibrary(this.animLibrary);
-    const savedVisitorSens = typeof localStorage !== 'undefined' ? localStorage.getItem('photomaton_visitor_sensitivity') : null;
-    const initialVisitorSens = savedVisitorSens !== null ? Number(savedVisitorSens) : 50;
+    const savedVisitorAbsence = localStorage.getItem('photomaton_visitor_absence_ms');
     this.visitorDetector = new VisitorDetector({
-      sensitivity: initialVisitorSens
+      absenceMs: savedVisitorAbsence === null ? 3000 : Number(savedVisitorAbsence)
     });
     this.visitorDetector.addEventListener('new-visitor', (e) => this.handleNewVisitor(e.detail));
     this.canvasBroadcaster = new CanvasBroadcaster(this.canvasEl, {
+      canvasIncludesVideo: true,
       videoElement: this.videoEl,
       mirrored: true,
       width: 1080,
@@ -56,8 +64,8 @@ class App {
     this.canvasBroadcaster.mountPreview(document.getElementById('webrtc-preview-slot'));
     this.presetRecorder = new MotionPresetRecorder({ fps: 30, maxDurationMs: 30000 });
     this.isSavingPresetRecording = false;
-    this.bustModeEnabled = false;
-    this.bustModeRequested = false;
+    this.bustModeEnabled = true;
+    this.bustModeRequested = true;
     this.minimalistMode = false;
     this.notificationEntries = new Map();
     this.currentVisitorId = null;
@@ -66,6 +74,9 @@ class App {
     this.comfyVisitorPending = false;
     this.comfyVisitorReadyAt = 0;
     this.comfyCallId = 0;
+    this.comfyCancellation = Promise.resolve();
+    this.comfyMinimalistJobs = new Set();
+    this.comfyPreviousMinimalist = false;
     this.presetAudioLoading = false;
     this.comfySettings = {
       enabled: localStorage.getItem('photomaton_comfy_enabled') === 'true',
@@ -100,9 +111,9 @@ class App {
     this.currentFps = 60;
     this.rafId = null;
 
-    // Mirror is permanently enabled; smoothing, webcam and texture are ON.
+    // Webcam feeds tracking and textures; the displayed composition is the bust.
     this.isMirrored = true;
-    this.showWebcam = true;
+    this.showWebcam = false;
 
     this.autonomousEngine.setMirrored(this.isMirrored);
     this.renderer.setMirrored(true);
@@ -118,6 +129,13 @@ class App {
       await this.tracker.init((status) => {
         if (this.loadingText) this.loadingText.textContent = status;
       });
+
+      // Align the generic fallback texture before starting live webcam inference.
+      try {
+        await this.renderer.loadFallbackFaceTexture(this.tracker);
+      } catch (error) {
+        console.warn('Texture de secours indisponible, visage plein conservé :', error);
+      }
 
       // 1b. Initialize Animation Library in public/animations/
       try {
@@ -139,27 +157,15 @@ class App {
         await this.camera.start(null, { width: 1280, height: 720 });
       } catch (camErr) {
         console.warn('Camera failed to start:', camErr);
-        if (this.loadingText) {
-          this.loadingText.innerHTML = `
-            <div style="font-size: 13px; margin-bottom: 8px;">📷 Webcam unavailable (${camErr.message || 'permission denied'})</div>
-            <div style="display: flex; gap: 8px; justify-content: center; margin-top: 10px;">
-              <button id="btn-retry-camera" class="tool-btn" style="padding: 6px 12px; font-size: 12px;">↺ Retry Camera</button>
-              <button id="btn-skip-camera" class="tool-btn active" style="padding: 6px 12px; font-size: 12px;">📁 Video Upload Mode</button>
-            </div>
-          `;
-          document.getElementById('btn-retry-camera')?.addEventListener('click', () => window.location.reload());
-          document.getElementById('btn-skip-camera')?.addEventListener('click', () => {
-            if (this.loadingOverlay) this.loadingOverlay.classList.add('hidden');
-          });
-        }
+        this.showNotification('Webcam indisponible : buste autonome avec visage de secours.', '', 6000, 'camera');
       }
 
       // 3. Initialize the fixed Full HD render surface once. Its CSS display
       // adapts to the operator window without changing the WebRTC composition.
       this.handleResize();
 
-      // 4. Hide Loading Overlay if camera started
-      if (this.camera.isStreaming && this.loadingOverlay) {
+      // 4. Continue with the autonomous fallback even without a camera.
+      if (this.loadingOverlay) {
         this.loadingOverlay.classList.add('hidden');
       }
 
@@ -182,9 +188,37 @@ class App {
   }
 
   setupEventListeners() {
-    // Always display textured mask with webcam background
-    this.showWebcam = true;
-    document.body.classList.add('show-webcam', 'show-texture');
+    const oscDropdown = document.querySelector('.osc-dropdown');
+    document.addEventListener('click', event => {
+      if (oscDropdown && !oscDropdown.contains(event.target)) oscDropdown.open = false;
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && oscDropdown?.open) {
+        oscDropdown.open = false;
+        oscDropdown.querySelector('summary').focus();
+      }
+    });
+    document.querySelectorAll('[data-osc-signal]').forEach(oscButton => oscButton.addEventListener('click', async event => {
+      const button = event.currentTarget;
+      if (oscDropdown) oscDropdown.open = false;
+      button.disabled = true;
+      try {
+        const response = await fetch(`/api/osc/test?signal=${encodeURIComponent(button.dataset.oscSignal)}`,
+          { method: 'POST', signal: AbortSignal.timeout(5000) });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Envoi OSC impossible');
+        this.showNotification(`OSC envoyé vers ${result.destinations.join(', ')}:${result.port} · ${result.oscAddress} 1`,
+          'success', 5000, 'osc-test');
+      } catch (error) {
+        this.showNotification(error.message || 'Envoi OSC impossible', 'error', 5000, 'osc-test');
+      } finally {
+        button.disabled = false;
+      }
+    }));
+    // Webcam remains a tracking and texture source, never a background.
+    this.showWebcam = false;
+    document.body.classList.remove('show-webcam');
+    document.body.classList.add('show-texture');
 
     document.getElementById('btn-copy-visitor-id')?.addEventListener('click', async () => {
       if (!this.currentVisitorId) return;
@@ -198,6 +232,12 @@ class App {
     });
 
     // 3. Autonomous Mode Toggle Button
+    document.getElementById('btn-toggle-face-texture')?.addEventListener('click', () => {
+      if (this.appState === 'AUTONOMOUS' || !this.historyBuffer.hasCurrentVisitorSnapshot()) return;
+      this.preferCapturedTexture = !this.preferCapturedTexture;
+      this.restoreLiveFaceTexture();
+      this.syncFaceTextureButton();
+    });
     const btnAutonomous = document.getElementById('btn-toggle-autonomous');
     btnAutonomous?.addEventListener('click', () => {
       if (this.presetRecorder.isRecording) {
@@ -236,25 +276,26 @@ class App {
           this.autonomousEngine.stopAutonomous();
         }
         if (this.renderer.isTextureFrozen) {
-          this.renderer.unfreezeFaceTexture();
+          this.restoreLiveFaceTexture();
         }
         this.setState('LIVE');
       }
     });
 
-    // 3b. Manual override for the bust, enabled automatically in autonomous mode.
-    const btnBust = document.getElementById('btn-toggle-bust');
+    // Keep the bust composition in live and autonomous states.
     this.renderer.setBustModel('male_facemesh_zone_creusee');
-
-    btnBust?.addEventListener('click', () => {
-      this.setBustMode(!this.renderer.showBust, true);
-    });
+    this.renderer.setShowWebcam(false);
+    this.setBustMode();
 
     document.getElementById('btn-toggle-minimalist')?.addEventListener('click', () => {
       this.setMinimalistMode(!this.minimalistMode);
     });
 
     document.getElementById('btn-debug-new-visitor')?.addEventListener('click', () => {
+      if (this.isVisitorDetectionBlocked()) {
+        this.showNotification('Génération en cours · nouveau visiteur ignoré');
+        return;
+      }
       // Let live tracking collect a fresh visitor image during the test.
       if (this.forceAutonomousMode) btnAutonomous?.click();
       this.handleNewVisitor({ reason: 'DEBUG_TRIGGER' });
@@ -337,19 +378,19 @@ class App {
       });
     }
 
-    // 6. Visitor Detection Sensitivity (Range: 10% to 100%, Default: 50%)
-    const sliderVisitorSens = document.getElementById('slider-visitor-sensitivity');
-    const visitorSensValLabel = document.getElementById('visitor-sensitivity-val-label');
-    const currentSens = this.visitorDetector?.getSensitivity?.() || 50;
+    // 6. Absence duration before starting a new visit.
+    const sliderVisitorSens = document.getElementById('slider-visitor-absence');
+    const visitorSensValLabel = document.getElementById('visitor-absence-val-label');
+    const currentSens = this.visitorDetector.absenceMs / 1000;
     if (sliderVisitorSens) {
       sliderVisitorSens.value = String(currentSens);
-      if (visitorSensValLabel) visitorSensValLabel.textContent = `${currentSens}%`;
+      if (visitorSensValLabel) visitorSensValLabel.textContent = `${currentSens} s`;
       sliderVisitorSens.addEventListener('input', (e) => {
         const val = parseInt(e.target.value, 10);
-        this.visitorDetector.setSensitivity(val);
-        if (visitorSensValLabel) visitorSensValLabel.textContent = `${val}%`;
+        this.visitorDetector.setAbsenceMs(val * 1000);
+        if (visitorSensValLabel) visitorSensValLabel.textContent = `${val} s`;
         try {
-          localStorage.setItem('photomaton_visitor_sensitivity', String(val));
+          localStorage.setItem('photomaton_visitor_absence_ms', String(val * 1000));
         } catch (e) {}
       });
     }
@@ -374,9 +415,14 @@ class App {
 
     // Keyboard Shortcuts
     window.addEventListener('keydown', (e) => {
-      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName) || e.target.isContentEditable) return;
+      if (e.isComposing || e.ctrlKey || e.altKey || e.metaKey) return;
 
-      if (e.key.toLowerCase() === 'o') {
+      if (e.key.toLowerCase() === 'm') {
+        if (e.repeat) return;
+        e.preventDefault();
+        document.body.classList.toggle('interface-hidden');
+      } else if (e.key.toLowerCase() === 'o') {
         document.getElementById('btn-toggle-align')?.click();
       } else if (e.key.toLowerCase() === 'a') {
         btnAutonomous?.click();
@@ -477,37 +523,21 @@ class App {
 
     this.isAlignModeActive = false;
 
-    const storageKey = 'facemesh_camera_offset';
     const offset = { x: 0, y: 0, pitch: 0, yaw: 0, roll: 0, zoom: 1.0 };
-    let savedOffset = null;
-    try {
-      const stored = JSON.parse(localStorage.getItem(storageKey));
-      if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
-        let hasValue = false;
-        for (const [key, min, max] of [['x', -300, 300], ['y', -300, 300], ['pitch', -45, 45], ['yaw', -45, 45], ['roll', -30, 30], ['zoom', 0.5, 1.8]]) {
-          if (Number.isFinite(stored[key])) {
-            offset[key] = Math.max(min, Math.min(max, stored[key]));
-            hasValue = true;
-          }
-        }
-        if (hasValue) savedOffset = { ...offset };
-      }
-    } catch { /* Start neutral if browser storage is unavailable or invalid. */ }
-    this.renderer.setCameraOffset(offset);
+    const profiles = new CameraAlignmentProfiles(this.renderer, localStorage);
 
     const updateSaveStatus = () => {
       const current = this.renderer.getCameraOffset();
+      const savedOffset = profiles.saved;
       const unchanged = savedOffset && Object.keys(offset).every(key => Math.abs(current[key] - savedOffset[key]) < 0.000001);
       if (saveStatus) saveStatus.textContent = unchanged ? 'Réglage enregistré' : 'Cliquez sur Save pour mémoriser';
     };
 
     btnSaveCam?.addEventListener('click', () => {
       try {
-        const current = this.renderer.getCameraOffset();
-        localStorage.setItem(storageKey, JSON.stringify(current));
-        savedOffset = current;
+        profiles.save();
         updateSaveStatus();
-        this.showNotification('Alignement 3D enregistré sur ce navigateur', 'success', 2500, 'camera-alignment');
+        this.showNotification(`Align 3D · ${ALIGNMENT_PROFILE_LABELS[profiles.active]} enregistré`, 'success', 2500, 'camera-alignment');
       } catch {
         if (saveStatus) saveStatus.textContent = 'Enregistrement indisponible sur ce navigateur';
         this.showNotification('Impossible de mémoriser l’alignement 3D', 'error', 3500, 'camera-alignment');
@@ -536,7 +566,16 @@ class App {
       updateSaveStatus();
     };
 
-    updateUIFromState();
+    this.syncAlignProfile = () => {
+      const mode = this.minimalistMode ? 'minimalist'
+        : (this.bustModeEnabled || this.appState === 'AUTONOMOUS' ? 'autonomous_bust' : 'live');
+      profiles.activate(mode);
+      const label = document.getElementById('align-profile-label');
+      if (label) label.textContent = `Profil : ${ALIGNMENT_PROFILE_LABELS[mode]}`;
+      if (btnSaveCam) btnSaveCam.title = `Enregistrer Align 3D pour ${ALIGNMENT_PROFILE_LABELS[mode]}`;
+      updateUIFromState();
+    };
+    this.syncAlignProfile();
 
     // Toggle Align Mode
     const setAlignMode = (active) => {
@@ -817,7 +856,7 @@ class App {
         this.forceAutonomousMode = false;
         document.getElementById('btn-toggle-autonomous')?.classList.remove('active');
         this.autonomousEngine.stopAutonomous();
-        this.renderer.unfreezeFaceTexture();
+        this.restoreLiveFaceTexture();
         this.setState('LIVE');
       }
 
@@ -913,7 +952,7 @@ class App {
       } catch (error) {
         this.setComfySettingsStatus(`Échec : ${error.message}`, 'error');
       } finally {
-        runButton.disabled = !this.canUseAutonomous();
+        runButton.disabled = !this.canCaptureComfyImage();
       }
     });
   }
@@ -955,7 +994,8 @@ class App {
     status.classList.toggle('error', state === 'error');
   }
 
-  showNotification(message, state = '', durationMs = 3500, key = 'general') {
+  showNotification(message, state = '', durationMs = 1500, key = 'general') {
+    if (durationMs > 0) durationMs = Math.min(durationMs, state === 'error' ? 2500 : 1500);
     const container = document.getElementById('app-notifications');
     if (!container) return;
     let entry = this.notificationEntries.get(key);
@@ -1012,7 +1052,6 @@ class App {
       this.comfyVisitorPending = false;
       return;
     }
-    if (!this.canUseAutonomous()) return;
     const remaining = Math.max(0, this.comfyVisitorReadyAt - performance.now());
     if (remaining > 0) {
       if (this.comfyVisitorTimer === null) {
@@ -1031,9 +1070,13 @@ class App {
 
   async executeComfyWorkflow() {
     if (!this.comfySettings.enabled || !this.comfySettings.baseUrl) return;
+    const revision = this.comfyCallId;
     this.updateComfyStatusButton('running');
     try {
-      const result = await this.queueComfyWorkflow(this.comfySettings);
+      await this.comfyCancellation;
+      if (revision !== this.comfyCallId) return;
+      const result = await this.queueComfyWorkflow(this.comfySettings, true);
+      if (result.superseded) return;
       console.log(`[ComfyUI] Workflow ${result.workflowFilename} envoyé, prompt ${result.promptId || 'accepté'}`);
       this.updateComfyStatusButton();
     } catch (error) {
@@ -1043,32 +1086,124 @@ class App {
     }
   }
 
-  async queueComfyWorkflow(settings) {
-    if (!this.canUseAutonomous()) {
-      throw new Error('Un cliché FaceMesh du visiteur actuel doit être mémorisé avant de lancer ComfyUI.');
-    }
+  canCaptureComfyImage() {
+    return this.videoEl.readyState >= 2 && this.videoEl.videoWidth > 0 && this.videoEl.videoHeight > 0;
+  }
+
+  captureComfyWebcamImage() {
+    if (!this.canCaptureComfyImage()) throw new Error('La webcam ne fournit pas encore d’image.');
+    const canvas = document.createElement('canvas');
+    canvas.width = this.videoEl.videoWidth;
+    canvas.height = this.videoEl.videoHeight;
+    canvas.getContext('2d').drawImage(this.videoEl, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/jpeg', 0.92);
+  }
+
+  beginComfyMinimalistJob() {
+    const token = Symbol('comfy-render');
+    if (!this.comfyMinimalistJobs.size) this.comfyPreviousMinimalist = this.minimalistMode;
+    this.comfyMinimalistJobs.add(token);
+    this.setMinimalistMode(true);
+    return token;
+  }
+
+  endComfyMinimalistJob(token) {
+    if (!token || !this.comfyMinimalistJobs.delete(token)) return;
+    if (!this.comfyMinimalistJobs.size) this.setMinimalistMode(this.comfyPreviousMinimalist);
+  }
+
+  async queueComfyWorkflow(settings, visitorGeneration = false) {
     const callId = ++this.comfyCallId;
+    const minimalistToken = visitorGeneration ? this.beginComfyMinimalistJob() : null;
     this.showNotification('Appel à ComfyUI…', 'running', 0, 'comfy-call');
     try {
+      const visitorImage = this.captureComfyWebcamImage();
       const response = await fetch('/api/comfy/queue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           baseUrl: settings.baseUrl,
-          workflowFilename: settings.workflowFilename
+          workflowFilename: settings.workflowFilename,
+          visitorImage
         })
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || `Erreur ${response.status}`);
+      if (result.superseded || callId !== this.comfyCallId) {
+        this.endComfyMinimalistJob(minimalistToken);
+        return { superseded: true };
+      }
+      if (!result.promptId) throw new Error('ComfyUI n’a pas renvoyé de prompt ID');
+      this.monitorComfyRender({ ...result, baseUrl: settings.baseUrl, minimalistToken, callId });
       if (callId === this.comfyCallId) {
         this.showNotification('Workflow ComfyUI envoyé', 'success', 3000, 'comfy-call');
       }
       return result;
     } catch (error) {
+      this.endComfyMinimalistJob(minimalistToken);
+      if (callId !== this.comfyCallId) return { superseded: true };
       if (callId === this.comfyCallId) {
         this.showNotification(`Échec ComfyUI · ${error.message}`, 'error', 5000, 'comfy-call');
       }
       throw error;
+    }
+  }
+
+  async monitorComfyRender(render) {
+    try {
+      const key = `comfy-render-${render.promptId}`;
+      this.showNotification('Rendu ComfyUI en cours…', 'running', 0, key);
+      let failures = 0;
+      while (true) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        if (render.callId !== this.comfyCallId) {
+          this.showNotification('Rendu remplacé par le nouveau visiteur', '', 1500, key);
+          return;
+        }
+        let status;
+        try {
+          const response = await fetch('/api/comfy/status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ baseUrl: render.baseUrl, promptId: render.promptId })
+          });
+          status = await response.json();
+          if (!response.ok) throw new Error(status.error || `Erreur ${response.status}`);
+          failures = 0;
+        } catch (error) {
+          if (render.callId !== this.comfyCallId) return;
+          if (++failures < 5) continue;
+          this.showNotification(`Suivi ComfyUI indisponible · ${error.message}`, 'error', 8000, key);
+          return;
+        }
+        if (render.callId !== this.comfyCallId) return;
+        if (status.state === 'pending') continue;
+        const detail = { ...render, outputs: status.outputs, error: status.error };
+        if (status.state === 'completed') {
+          this.showNotification('Rendu ComfyUI terminé', 'success', 8000, key);
+          window.dispatchEvent(new CustomEvent('comfy:render-completed', { detail }));
+          // Send OSC immediately; its response must not delay the video return.
+          fetch('/api/osc/test?signal=generationDone', {
+            method: 'POST', signal: AbortSignal.timeout(5000)
+          }).then(async response => {
+            if (!response.ok) {
+              const result = await response.json();
+              throw new Error(result.error || 'Envoi OSC impossible');
+            }
+          }).catch(error => {
+            this.showNotification(`Rendu terminé · échec OSC : ${error.message}`, 'error', 2500, 'osc-generation');
+          });
+          if (render.minimalistToken) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        } else {
+          this.showNotification(`Échec du rendu ComfyUI · ${status.error}`, 'error', 8000, key);
+          window.dispatchEvent(new CustomEvent('comfy:render-failed', { detail }));
+        }
+        return;
+      }
+    } finally {
+      this.endComfyMinimalistJob(render.minimalistToken);
     }
   }
 
@@ -1291,34 +1426,48 @@ class App {
       const now = performance.now();
 
       // 1. MediaPipe Frame Inference
-      const rawTracking = this.tracker.processVideoFrame(this.videoEl, now);
+      const cameraAvailable = this.camera.isStreaming
+        && this.camera.stream?.getVideoTracks().some(track => track.readyState === 'live' && !track.muted);
+      const rawTracking = cameraAvailable ? this.tracker.processVideoFrame(this.videoEl, now) : null;
 
-      // Check whether a face is actively tracked on this frame
-      const isFacePresent = Boolean(rawTracking && rawTracking.detected && !this.forceAutonomousMode);
+      const isTracked = Boolean(rawTracking?.detected && !this.forceAutonomousMode);
+      const { renderW, renderH } = this.renderer.getVideoMetrics();
+      this.departureBlendWeight = isTracked ? getDepartureBlend(rawTracking.landmarks,
+        renderW, renderH, this.renderer.canvasWidth, this.renderer.canvasHeight,
+        this.canvasBroadcaster?.outputWidth || 1080, this.canvasBroadcaster?.outputHeight || 1080) : 1;
+      // Leave live mode before the face is clipped by the square broadcast crop.
+      // Require more clearance when returning, so boundary jitter cannot toggle modes.
+      const isFacePresent = isTracked && isFaceInsideOutput(
+        rawTracking.landmarks, renderW, renderH,
+        this.renderer.canvasWidth, this.renderer.canvasHeight,
+        this.canvasBroadcaster?.outputWidth || 1080,
+        this.canvasBroadcaster?.outputHeight || 1080,
+        this.appState === 'AUTONOMOUS' ? 0.06 : 0.02
+      );
 
-      // Update aspect ratio and evaluate biometric visitor detection
-      const ar = (this.videoEl.videoWidth || 1280) / Math.max(1, (this.videoEl.videoHeight || 720));
-      this.visitorDetector.setAspectRatio(ar);
-      this.visitorDetector.update(isFacePresent ? rawTracking : null, this.videoEl, now);
+      // Session detection uses webcam presence, independently of the output crop.
+      this.visitorDetector.update(rawTracking, now);
       this.updateAutonomousAvailability();
 
       if (isFacePresent) {
         this.consecutiveDetectedFrames++;
         this.lastFaceDetectedTime = now;
-
-        // If not blending, unfreeze face texture to restore live webcam feed
-        if (!this.isBlendingToLive && this.appState !== 'AUTONOMOUS' && this.renderer.isTextureFrozen) {
-          this.renderer.unfreezeFaceTexture();
+        if (this.consecutiveDetectedFrames === 1) {
+          this.autoExitLandmarks = this.appState === 'AUTONOMOUS'
+            ? this.lastRenderedTrackingResult?.landmarks?.map(point => ({ ...point })) : null;
+          this.isBlendingToLive = !!this.autoExitLandmarks;
+          this.blendToLiveStartTime = now;
+          if (this.renderer.isTextureFrozen) this.restoreLiveFaceTexture();
         }
 
-        // Return from Autonomous mode: initiate smooth organic glide back to live face
+        // Keep the captured portrait through Live and autonomous handoffs.
+        if (!this.isBlendingToLive && this.appState !== 'AUTONOMOUS' && this.renderer.isTextureFrozen) {
+          this.restoreLiveFaceTexture();
+        }
+
+        // A detected visitor takes over immediately at the tracked position.
         if (this.appState === 'AUTONOMOUS') {
-          this.isBlendingToLive = true;
-          this.blendToLiveStartTime = now;
-          this.blendToLiveDuration = 700; // 700ms silky-smooth organic return glide
-          this.autoExitLandmarks = this.autonomousEngine.lastAutonomousLandmarks
-            ? this.autonomousEngine.lastAutonomousLandmarks.map(p => ({ x: p.x, y: p.y, z: p.z || 0 }))
-            : null;
+          if (this.renderer.isTextureFrozen) this.restoreLiveFaceTexture();
           this.autonomousEngine.stopAutonomous();
           if (this.appState !== 'NEW_PERSON') {
             this.setState('LIVE');
@@ -1334,7 +1483,7 @@ class App {
 
         // If a clean, unobstructed frontal frame is available, link it to the autonomous engine.
         const bestCand = this.historyBuffer.bestOverallSnapshot;
-        if (bestCand && bestCand.landmarks) {
+        if (this.useVisitorPortrait && bestCand && bestCand.landmarks) {
           this.autonomousEngine.setBaseLandmarks(bestCand.landmarks);
         }
 
@@ -1397,17 +1546,21 @@ class App {
               renderResult = {
                 ...processedResult,
                 landmarks: blendedLandmarks,
+                poseLandmarks: blendedLandmarks,
+                liveLandmarks: rawTracking.landmarks,
                 blendToLiveWeight: invT // 1.0 at start, 0.0 at end
               };
             } else {
               this.isBlendingToLive = false;
               this.autoExitLandmarks = null;
               if (this.renderer.isTextureFrozen) {
-                this.renderer.unfreezeFaceTexture();
+                this.restoreLiveFaceTexture();
               }
             }
           }
 
+          renderResult = this.blendDepartingFace(renderResult, rawTracking, now);
+          renderResult.liveTexturePreferred = !this.preferCapturedTexture;
           this.lastRenderedTrackingResult = renderResult;
           this.renderer.render(renderResult);
         }
@@ -1416,6 +1569,11 @@ class App {
           statLatency.textContent = `${Math.round(rawTracking.latencyMs)}ms`;
         }
 
+      } else if (!this.forceAutonomousMode && cameraAvailable
+        && this.appState !== 'AUTONOMOUS' && this.lastRenderedTrackingResult?.detected
+        && now - this.lastFaceDetectedTime < 180) {
+        // Ignore brief detection dropouts instead of changing texture and mode.
+        this.renderer.render(this.lastRenderedTrackingResult);
       } else {
         // Face is absent or force autonomous mode is active
         this.consecutiveDetectedFrames = 0;
@@ -1428,11 +1586,13 @@ class App {
             this.isBlendingToLive = false;
             this.autoExitLandmarks = null;
 
-            // Start autonomous mode with smooth quintic S-curve glide from last tracking pose into center
+            // Ease smoothly from the last displayed face to avoid a point-cloud
+            // jump on tracking loss. Other views retain the longer handoff.
             this.autonomousEngine.startAutonomous(
               now,
-              this.lastTrackingLandmarks,
-              this.lastTrackingHeadPose
+              this.lastRenderedTrackingResult?.landmarks || this.lastTrackingLandmarks,
+              this.lastTrackingHeadPose,
+              this.minimalistMode ? 500 : 850
             );
           }
 
@@ -1483,24 +1643,80 @@ class App {
    * Freezes the cleanest, most centered, motionless, frontal screenshot as texture reference
    * for both the 3D mask and the background plane in autonomous mode.
    */
-  applyBestTextureReference(now = performance.now(), minAgeMs = 1500) {
+  restoreLiveFaceTexture() {
+    if ((this.preferCapturedTexture || this.departureBlendWeight > 0)
+      && this.historyBuffer.hasCurrentVisitorSnapshot()) {
+      this.applyBestTextureReference(performance.now(), 0);
+    } else {
+      this.renderer.unfreezeFaceTexture();
+    }
+  }
+
+  blendDepartingFace(liveFrame, rawTracking, now) {
+    const weight = this.departureBlendWeight || 0;
+    if (this.minimalistMode || !weight || !this.historyBuffer.hasCurrentVisitorSnapshot()) {
+      if (this.departureEngine.isActive) this.departureEngine.stopAutonomous();
+      return liveFrame;
+    }
+    this.applyBestTextureReference(now, 0);
+    if (!this.departureEngine.isActive) {
+      this.departureEngine.setBaseLandmarks(this.renderer.frozenLandmarks);
+      // This preview engine has no enabled audio and never changes visitor state.
+      this.departureEngine.startAutonomous(now, null, rawTracking.headPose);
+    }
+    const { renderW, renderH } = this.renderer.getVideoMetrics();
+    const autoFrame = this.departureEngine.generateFrame(now, renderW, renderH);
+    if (!autoFrame) return liveFrame;
+    const mixPoints = (live, auto) => live.map((p, i) => {
+      const a = auto?.[i] || p;
+      return { ...p, x: p.x * (1 - weight) + a.x * weight,
+        y: p.y * (1 - weight) + a.y * weight,
+        z: (p.z || 0) * (1 - weight) + (a.z || 0) * weight };
+    });
+    return { ...liveFrame,
+      landmarks: mixPoints(liveFrame.landmarks, autoFrame.landmarks),
+      poseLandmarks: mixPoints(liveFrame.landmarks, autoFrame.poseLandmarks || autoFrame.landmarks),
+      liveLandmarks: rawTracking.landmarks,
+      departureTextureMix: this.preferCapturedTexture ? 1 : weight
+    };
+  }
+
+  applyBestTextureReference(now = performance.now(), minAgeMs = 1500, refresh = false) {
     if (!this.canUseAutonomous()) return false;
-    const backupFrame = this.historyBuffer.getBestVisitorBackupFrame(now, minAgeMs);
+    // Reuse the exact displayed portrait on departure instead of picking another shot.
+    if (!refresh && this.historyBuffer.hasCurrentVisitorSnapshot()
+      && this.renderer.isTextureFrozen && this.renderer.frozenLandmarks) {
+      this.renderer.setAutonomousFallback(false);
+      return true;
+    }
+    const backupFrame = this.historyBuffer.hasCurrentVisitorSnapshot()
+      ? this.historyBuffer.getBestVisitorBackupFrame(now, minAgeMs) : null;
     if (backupFrame && !backupFrame.isArchived && backupFrame.canvas && backupFrame.landmarks) {
       const ageStr = (now - backupFrame.timestamp).toFixed(0);
       console.log(`[FaceTextureHistoryBuffer] 🎭 Texture autonome de référence appliquée (Âge: ${ageStr}ms, Score: ${Math.round(backupFrame.qualityScore)})`);
+      this.renderer.setAutonomousFallback(false);
       this.renderer.freezeFaceTexture(backupFrame.canvas, backupFrame.landmarks);
       this.autonomousEngine.setBaseLandmarks(backupFrame.landmarks);
       return true;
     }
-    return false;
+    const { renderW, renderH } = this.renderer.getVideoMetrics();
+    this.fallbackFaceLandmarks = createFallbackFaceLandmarks(renderW / Math.max(1, renderH));
+    this.renderer.setAutonomousFallback(true);
+    this.autonomousEngine.setBaseLandmarks(this.fallbackFaceLandmarks);
+    return true;
   }
 
   canUseAutonomous() {
-    return this.historyBuffer.hasCurrentVisitorSnapshot();
+    return this.fallbackFaceLandmarks?.length >= 468;
   }
 
   updateAutonomousAvailability(force = false) {
+    this.syncFaceTextureButton();
+    const runButton = document.getElementById('btn-run-comfy');
+    if (runButton) {
+      runButton.disabled = !this.canCaptureComfyImage();
+      runButton.title = runButton.disabled ? 'La webcam doit être active pour lancer ComfyUI' : 'Exécuter avec un nouvel instantané de la webcam';
+    }
     const available = this.canUseAutonomous();
     if (!available) {
       this.forceAutonomousMode = false;
@@ -1508,7 +1724,7 @@ class App {
       if (this.appState === 'AUTONOMOUS') {
         this.isBlendingToLive = false;
         this.autoExitLandmarks = null;
-        this.renderer.unfreezeFaceTexture();
+        this.restoreLiveFaceTexture();
         this.setState('WAITING');
       }
     }
@@ -1517,19 +1733,35 @@ class App {
     const button = document.getElementById('btn-toggle-autonomous');
     if (button) {
       button.disabled = !available;
-      button.title = available ? 'Activer / Forcer le mode autonome (A)' : 'Mémorisez un cliché FaceMesh pour activer le mode autonome';
-    }
-    const runButton = document.getElementById('btn-run-comfy');
-    if (runButton) {
-      runButton.disabled = !available;
-      runButton.title = available ? 'Exécuter le workflow ComfyUI' : 'Mémorisez un cliché FaceMesh avant de lancer ComfyUI';
+      button.title = 'Activer / Forcer le mode autonome (A) — visage générique texturé si aucun cliché';
     }
     for (const button of document.querySelectorAll('.anim-btn-test')) button.disabled = !available;
   }
 
   handleVisitorSnapshotReady() {
+    // Every valid visitor capture replaces the generic portrait automatically.
+    this.useVisitorPortrait = true;
+    if (this.appState === 'AUTONOMOUS' || this.preferCapturedTexture) {
+      this.applyBestTextureReference(performance.now(), 0, true);
+    }
     this.updateAutonomousAvailability();
     this.tryRunComfyForVisitor();
+  }
+
+  syncFaceTextureButton() {
+    const button = document.getElementById('btn-toggle-face-texture');
+    if (!button) return;
+    const hasSnapshot = this.historyBuffer.hasCurrentVisitorSnapshot();
+    const autonomous = this.appState === 'AUTONOMOUS';
+    const captured = autonomous ? hasSnapshot : this.preferCapturedTexture && hasSnapshot;
+    button.disabled = autonomous || !hasSnapshot;
+    button.textContent = autonomous && !hasSnapshot ? 'Texture : fallback'
+      : captured ? 'Texture : FaceMesh' : 'Texture : Live';
+    button.setAttribute('aria-pressed', String(captured));
+    button.classList.toggle('active', captured);
+    button.title = autonomous ? 'Le mode autonome conserve le cliché FaceMesh, ou le fallback sans cliché.'
+      : !hasSnapshot ? 'En attente d’un cliché FaceMesh pour pouvoir changer de texture.'
+        : 'Basculer entre la texture webcam en direct et le cliché FaceMesh mémorisé.';
   }
 
   /**
@@ -1559,15 +1791,37 @@ class App {
     button.setAttribute('aria-label', id ? `Copier l’identifiant du visiteur : ${id}` : 'Aucun visiteur identifié');
   }
 
+  isVisitorDetectionBlocked() {
+    return this.minimalistMode && this.comfyMinimalistJobs.size > 0;
+  }
+
   handleNewVisitor(detail = {}) {
+    // Continue tracking presence, but ignore new visits during the current
+    // minimalist render and its one-second video-return delay.
+    if (this.isVisitorDetectionBlocked()) return;
+    // Invalidate old render monitors immediately, before the one-second delay.
+    this.comfyCallId++;
+    if (this.comfySettings.enabled && this.comfySettings.baseUrl) {
+      this.comfyCancellation = fetch('/api/comfy/cancel', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseUrl: this.comfySettings.baseUrl })
+      }).then(async response => {
+        if (!response.ok) {
+          const result = await response.json();
+          throw new Error(result.error || 'Annulation ComfyUI impossible');
+        }
+      }).catch(error => {
+        // Submission retries cancellation server-side before accepting a new job.
+        console.error('[ComfyUI] Annulation:', error);
+      });
+    }
     // A new session gets a random ID; tracking loss and autonomous playback keep it.
     this.currentVisitorId = typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID()
       : Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
     this.updateVisitorIdUI();
-    const reason = detail.reason || 'BIOMETRIC_CHANGE';
-    const dissimStr = detail.dissimilarity !== undefined ? detail.dissimilarity.toFixed(3) : 'N/A';
-    console.log(`[VisitorDetector] 👤 Visiteur ${this.currentVisitorId} (Raison: ${reason}, Dissimilarité: ${dissimStr})`);
+    const reason = detail.reason || 'MANUAL';
+    console.log(`[VisitorDetector] Visiteur ${this.currentVisitorId} (${reason}, absence : ${Math.round(detail.absenceDuration || 0)} ms)`);
 
     this.setState('NEW_PERSON');
 
@@ -1578,6 +1832,7 @@ class App {
 
     // Reset best visitor backup texture tracker for this new visitor session
     this.historyBuffer.resetVisitorSession();
+    this.renderer.unfreezeFaceTexture();
     this.hasVisitorSnapshot = false;
     this.updateAutonomousAvailability();
 
@@ -1593,37 +1848,42 @@ class App {
   }
 
   updateBroadcastBackground() {
-    this.canvasBroadcaster?.setLiveBackgroundEnabled(!this.minimalistMode && !this.bustModeEnabled && this.appState !== 'AUTONOMOUS');
+    this.canvasBroadcaster?.setLiveBackgroundEnabled(false);
   }
 
   setMinimalistMode(enabled) {
-    this.minimalistMode = !!enabled;
+    const wasMinimalist = this.minimalistMode;
+    this.minimalistMode = !!enabled || this.comfyMinimalistJobs.size > 0;
     this.renderer.setMinimalistMode(this.minimalistMode);
     document.body.classList.toggle('minimalist-mode', this.minimalistMode);
     const button = document.getElementById('btn-toggle-minimalist');
     button?.classList.toggle('active', this.minimalistMode);
     button?.setAttribute('aria-pressed', String(this.minimalistMode));
-    const bustButton = document.getElementById('btn-toggle-bust');
-    if (bustButton) bustButton.disabled = this.minimalistMode;
-    this.setBustMode(this.bustModeRequested);
+    this.setBustMode();
     if (this.lastRenderedTrackingResult?.detected) this.renderer.render(this.lastRenderedTrackingResult);
     this.canvasBroadcaster?.drawBroadcastFrame();
+    if (!wasMinimalist && this.minimalistMode) {
+      fetch('/api/osc/test?signal=newVisitor', {
+        method: 'POST', signal: AbortSignal.timeout(5000)
+      }).then(async response => {
+        if (!response.ok) {
+          const result = await response.json();
+          throw new Error(result.error || 'Envoi OSC impossible');
+        }
+      }).catch(error => {
+        this.showNotification(`Minimaliste · échec OSC : ${error.message}`, 'error', 2500, 'osc-minimalist');
+      });
+    }
   }
 
-  setBustMode(enabled, notify = false) {
-    this.bustModeRequested = !!enabled;
-    this.bustModeEnabled = this.bustModeRequested && !this.minimalistMode;
+  setBustMode() {
+    this.bustModeRequested = true;
+    this.bustModeEnabled = this.bustModeRequested && (!this.minimalistMode || this.renderer.autonomousFallback);
     this.renderer.setShowBust(this.bustModeEnabled);
     this.faceMeshAlignmentControls?.sync();
     document.body.classList.toggle('bust-only-mode', this.bustModeEnabled);
     this.updateBroadcastBackground();
-    const button = document.getElementById('btn-toggle-bust');
-    button?.classList.toggle('active', this.bustModeEnabled);
-    button?.setAttribute('aria-pressed', String(this.bustModeEnabled));
-    if (notify) {
-      this.showNotification(this.bustModeEnabled ? 'Mode Buste 3D activé' : 'Mode Buste 3D désactivé',
-        this.bustModeEnabled ? 'success' : '');
-    }
+    this.syncAlignProfile?.();
   }
 
   setState(newState) {
@@ -1632,10 +1892,11 @@ class App {
       return;
     }
     const wasAutonomous = this.appState === 'AUTONOMOUS';
+    if (newState !== 'AUTONOMOUS') this.renderer.setAutonomousFallback(false);
     this.appState = newState;
     if (wasAutonomous && newState !== 'AUTONOMOUS') this.autonomousEngine.stopAutonomous();
     if (wasAutonomous !== (newState === 'AUTONOMOUS')) {
-      this.setBustMode(newState === 'AUTONOMOUS');
+      this.setBustMode();
     }
     this.updateBroadcastBackground();
     this.updateAnimationPlaybackUI();

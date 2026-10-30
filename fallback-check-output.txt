@@ -1,0 +1,5 @@
+<!DOCTYPE html>
+<html><head>
+  <script type="module" src="/@vite/client"></script>
+<meta charset="utf-8"><style>body{margin:0;background:#eae7e2}canvas{width:100vw;height:100vh;object-fit:cover}pre{position:fixed;top:0;background:white;color:black;font:14px monospace;z-index:5}</style></head><body><canvas id="scene" width="1280" height="720" data-engine="three.js r170"></canvas><pre id="result">{"textureLandmarks":478,"outputDetected":true,"outputLandmarks":478,"bustLoaded":1,"wireframe":false}</pre><script type="module" src="/fallback-check.html?html-proxy&amp;index=0.js"></script>
+<script src="http://127.0.0.1:5174/wasm/vision_wasm_internal.js" crossorigin="anonymous"></script></body></html>

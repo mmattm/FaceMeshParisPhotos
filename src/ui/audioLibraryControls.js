@@ -4,8 +4,6 @@ export class AudioLibraryControls {
   constructor(app) {
     this.app = app;
     this.tracks = [];
-    this.selection = '';
-    try { this.selection = localStorage.getItem('photomaton_audio_selection') || ''; } catch { /* Default: all tracks. */ }
     try {
       this.app.autonomousEngine.presetAudio.setAudioDelayMs(Number(localStorage.getItem('photomaton_audio_delay_ms') || 0));
     } catch { /* Default: no audio delay. */ }
@@ -47,7 +45,6 @@ export class AudioLibraryControls {
     this.modal.addEventListener('keydown', event => {
       if (event.key === 'Escape') close();
     });
-    document.getElementById('btn-audio-library-all').addEventListener('click', () => this.choose(''));
     document.getElementById('btn-audio-library-toggle').addEventListener('click', () => {
       document.getElementById('btn-preset-audio').click();
     });
@@ -107,35 +104,17 @@ export class AudioLibraryControls {
     }
     this.tracks = (Array.isArray(data.tracks) ? data.tracks : [])
       .filter(track => typeof track.filename === 'string' && typeof track.url === 'string' && track.url.startsWith('/audio/'));
-    if (!this.tracks.some(track => track.filename === this.selection)) this.selection = '';
     if (this.previewUrl && !this.tracks.some(track => track.url === this.previewUrl)) this.stopPreview();
-    await this.applySelection();
+    await this.applyTracks();
     this.status.textContent = '';
     this.status.classList.remove('error');
     this.render();
   }
 
-  async applySelection() {
-    const tracks = this.selection ? this.tracks.filter(track => track.filename === this.selection) : this.tracks;
-    await this.app.autonomousEngine.setPresetAudioTracks(tracks.map(track => track.url));
+  async applyTracks() {
+    await this.app.autonomousEngine.setPresetAudioTracks(this.tracks.map(track => track.url));
     this.app.refreshPresetAudioButton();
     this.app.updateAnimationPlaybackUI(true);
-  }
-
-  async choose(filename) {
-    const previous = this.selection;
-    this.selection = filename;
-    try {
-      this.stopPreview();
-      await this.applySelection();
-      try { localStorage.setItem('photomaton_audio_selection', filename); } catch { /* Session selection. */ }
-      this.render();
-      this.app.showNotification(filename ? `Piste sélectionnée : ${filename}` : 'Alternance de toute la bibliothèque activée', 'success', 3000, 'audio-library');
-    } catch (error) {
-      this.selection = previous;
-      await this.applySelection().catch(() => {});
-      this.report(error);
-    }
   }
 
   stopPreview() {
@@ -175,6 +154,50 @@ export class AudioLibraryControls {
     return track ? { label: `${track.filename} (préécoute)`, playing: true } : null;
   }
 
+  async test(track, button) {
+    const app = this.app;
+    if (app.presetAudioLoading) return;
+    if (app.presetRecorder.isRecording) {
+      app.showNotification("Arrêtez d'abord l'enregistrement du preset.");
+      return;
+    }
+    if (!app.canUseAutonomous()) {
+      app.showNotification('Un cliché FaceMesh mémorisé est nécessaire pour tester une piste.');
+      return;
+    }
+    button.disabled = true;
+    app.presetAudioLoading = true;
+    app.refreshPresetAudioButton();
+    this.stopPreview();
+    try {
+      const engine = app.autonomousEngine;
+      await engine.setPresetAudioEnabled(true);
+      await app.canvasBroadcaster.setAudioStream(engine.presetAudio.destination.stream);
+      if (app.appState !== 'AUTONOMOUS') {
+        if (!app.applyBestTextureReference(performance.now())) {
+          app.showNotification('Placez le visage de face pour mémoriser le cliché.');
+          return;
+        }
+        app.setState('AUTONOMOUS');
+        engine.startAutonomous(performance.now(), app.lastTrackingLandmarks, app.lastTrackingHeadPose);
+      }
+      engine.stopAudio();
+      engine.presetAudio.nextTrackIndex = engine.presetAudio.urls.indexOf(track.url);
+      if (!engine.presetAudio.play()) throw new Error('Lecture de la piste impossible.');
+      app.forceAutonomousMode = true;
+      document.getElementById('btn-toggle-autonomous')?.classList.add('active');
+      this.modal.classList.add('hidden');
+      document.getElementById('audio-playback-status').focus();
+    } catch (error) {
+      this.report(error);
+    } finally {
+      button.disabled = false;
+      app.presetAudioLoading = false;
+      app.refreshPresetAudioButton();
+      app.updateAnimationPlaybackUI(true);
+    }
+  }
+
   render() {
     this.list.replaceChildren();
     document.getElementById('audio-library-count').textContent = `${this.tracks.length} piste${this.tracks.length > 1 ? 's' : ''}`;
@@ -188,11 +211,17 @@ export class AudioLibraryControls {
       const card = document.createElement('div');
       card.className = 'anim-item-card';
       card.dataset.audioFilename = track.filename;
-      card.innerHTML = `<div class="anim-item-info"><div class="anim-item-title-row"><span class="anim-item-name"></span><span class="anim-item-badge audio-selection"></span><span class="anim-item-badge audio-playing hidden">▶ En cours</span></div><div class="anim-item-meta"></div></div><div class="anim-item-actions"><button class="tool-btn audio-listen" type="button">▶ Écouter</button><button class="tool-btn audio-use" type="button">Utiliser</button><a class="tool-btn audio-download">⬇</a><button class="tool-btn audio-remove" type="button">🗑</button></div>`;
+      card.innerHTML = `<div class="anim-item-info"><div class="anim-item-title-row"><span class="anim-item-name"></span><span class="anim-item-badge audio-selection"></span><span class="anim-item-badge audio-playing hidden">▶ En cours</span></div><div class="anim-item-meta"></div></div><div class="anim-item-actions"><button class="tool-btn audio-listen" type="button">▶ Écouter</button><a class="tool-btn audio-download">⬇</a><button class="tool-btn audio-remove" type="button">🗑</button></div>`;
       card.querySelector('.anim-item-name').textContent = track.filename;
       card.querySelector('.anim-item-meta').textContent = `${(track.size / 1024 / (track.size >= 1048576 ? 1024 : 1)).toFixed(1)} ${track.size >= 1048576 ? 'Mo' : 'Ko'}`;
       card.querySelector('.audio-listen').addEventListener('click', () => this.listen(track));
-      card.querySelector('.audio-use').addEventListener('click', () => this.choose(track.filename));
+      const test = document.createElement('button');
+      test.type = 'button';
+      test.className = 'tool-btn audio-test';
+      test.textContent = '▶ Tester';
+      test.title = 'Fermer la bibliothèque et tester cette piste avec le lipsync';
+      test.addEventListener('click', () => this.test(track, test));
+      card.querySelector('.anim-item-actions').prepend(test);
       const download = card.querySelector('.audio-download');
       download.href = track.url;
       download.download = track.filename;
@@ -221,21 +250,15 @@ export class AudioLibraryControls {
     toggle.disabled = !this.tracks.length || document.getElementById('btn-preset-audio').disabled;
     toggle.textContent = player.enabled ? 'Désactiver l’audio' : 'Activer l’audio';
     toggle.classList.toggle('active', player.enabled);
-    const all = document.getElementById('btn-audio-library-all');
-    all.disabled = !this.tracks.length;
-    all.classList.toggle('active', !this.selection);
     for (const card of this.list.querySelectorAll('[data-audio-filename]')) {
       const filename = card.dataset.audioFilename;
       const track = this.tracks.find(track => track.filename === filename);
       const previewing = track && this.previewUrl === track.url && !this.preview.paused && !this.preview.ended;
       const playing = previewing || (track && player.durationMs && player.context?.state === 'running'
         && player.elapsedMs < player.playbackDurationMs && player.url === track.url);
-      const selected = !this.selection || filename === this.selection;
-      card.querySelector('.audio-selection').textContent = selected ? (this.selection ? 'Sélectionnée' : 'Alternance') : '';
-      card.querySelector('.audio-selection').classList.toggle('hidden', !selected);
+      card.querySelector('.audio-selection').textContent = 'Aléatoire';
       card.querySelector('.audio-playing').classList.toggle('hidden', !playing);
       card.querySelector('.audio-listen').textContent = previewing ? '■ Arrêter' : '▶ Écouter';
-      card.querySelector('.audio-use').classList.toggle('active', filename === this.selection);
       card.classList.toggle('is-playing', !!playing);
     }
   }

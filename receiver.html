@@ -21,6 +21,10 @@
       pointer-events: none; transition: opacity 0.8s ease;
     }
     .hud-overlay.faded { opacity: 0; }
+    /* A browser source must never put connection controls into the NDI image. */
+    html.obs-output .hud-overlay,
+    html.obs-output .waiting-screen { display: none !important; }
+    html.obs-output, html.obs-output body { cursor: none; }
     .hud-badge, .hud-btn {
       display: flex; align-items: center; gap: 9px; padding: 8px 14px;
       border: 1px solid rgba(255,255,255,.12); border-radius: 9px;
@@ -52,6 +56,11 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
+  <script>
+    if (new URLSearchParams(location.search).get('output') === 'obs') {
+      document.documentElement.classList.add('obs-output');
+    }
+  </script>
 </head>
 <body>
   <div class="video-container">
@@ -79,6 +88,12 @@
     const waitingScreen = document.getElementById('waiting-screen');
     const btnFullscreen = document.getElementById('btn-fullscreen');
     const btnAudio = document.getElementById('btn-audio');
+    const obsOutput = document.documentElement.classList.contains('obs-output');
+
+    function clearVideo() {
+      if (pc) { pc.close(); pc = null; }
+      videoEl.srcObject = null;
+    }
     btnAudio.addEventListener('click', () => {
       videoEl.muted = !videoEl.muted;
       btnAudio.textContent = videoEl.muted ? '🔇 Activer le son' : '🔊 Son activé';
@@ -97,6 +112,7 @@
     ];
 
     function showHUDTemporarily() {
+      if (obsOutput) return;
       hud.classList.remove('faded');
       if (hudTimeout) clearTimeout(hudTimeout);
       hudTimeout = setTimeout(() => {
@@ -129,6 +145,7 @@
         catch (error) { console.error('[WebRTC Receiver]', error); }
       };
       ws.onclose = () => {
+        clearVideo();
         statusDot.className = 'status-dot disconnected';
         statusText.textContent = 'Déconnecté. Nouvelle tentative…';
         waitingScreen.classList.remove('hidden');
@@ -144,6 +161,7 @@
       } else if (message.type === 'broadcaster-ready') {
         statusText.textContent = 'Émetteur détecté. Négociation…';
       } else if (message.type === 'broadcaster-disconnected') {
+        clearVideo();
         statusDot.className = 'status-dot disconnected';
         statusText.textContent = 'Émetteur déconnecté';
         waitingScreen.classList.remove('hidden');
@@ -172,11 +190,13 @@
         }
       };
       pc.onconnectionstatechange = () => {
+        if (!pc) return;
         if (pc.connectionState === 'connected') {
           statusDot.className = 'status-dot connected';
           statusText.textContent = 'FLUX WEBRTC DIRECT // CONNECTÉ';
           waitingScreen.classList.add('hidden');
         } else if (['disconnected', 'failed'].includes(pc.connectionState)) {
+          videoEl.srcObject = null;
           statusDot.className = 'status-dot disconnected';
           statusText.textContent = 'Flux interrompu. En attente…';
           waitingScreen.classList.remove('hidden');

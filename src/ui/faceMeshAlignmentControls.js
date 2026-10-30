@@ -6,7 +6,7 @@ export function setupFaceMeshAlignmentControls(renderer) {
   const visible = document.getElementById('check-facemesh-visible');
   const saveButton = document.getElementById('btn-save-facemesh-position');
   const model = renderer.bustOverlay.selectedModel;
-  const storageKeys = { bust: `facemesh_position_v2_${model}`, normal: 'facemesh_position_v1_normal' };
+  const storageKeys = { bust: `facemesh_position_v5_${model}`, normal: 'facemesh_position_v1_normal' };
   const defaults = { bust: renderer.getFaceMeshAlignment('bust'), normal: renderer.getFaceMeshAlignment('normal') };
   const keys = Object.keys(defaults.normal);
   const savedAlignments = { bust: null, normal: null };
@@ -29,7 +29,16 @@ export function setupFaceMeshAlignmentControls(renderer) {
 
   for (const mode of ['bust', 'normal']) {
     try {
-      const saved = JSON.parse(localStorage.getItem(storageKeys[mode]));
+      let saved = JSON.parse(localStorage.getItem(storageKeys[mode]));
+      if (!saved && mode === 'bust') {
+        const v4 = JSON.parse(localStorage.getItem(`facemesh_position_v4_${model}`));
+        const v3 = JSON.parse(localStorage.getItem(`facemesh_position_v3_${model}`));
+        const previous = v4 || v3 || JSON.parse(localStorage.getItem(`facemesh_position_v2_${model}`));
+        if (previous && typeof previous === 'object' && !Array.isArray(previous)) {
+          saved = { ...previous };
+          if (Number.isFinite(saved.y)) saved.y = Math.max(-50, Math.min(50, saved.y + (v4 ? -4 : v3 ? 12 : 20)));
+        }
+      }
       if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
         const values = Object.fromEntries(keys.filter(key => Number.isFinite(saved[key])).map(key => [key, saved[key]]));
         if (Object.keys(values).length) {

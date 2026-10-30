@@ -46,6 +46,9 @@ export class BustOverlayModel {
     this.currentScale = 1;
     this.targetScale = 1;
     this.hasPose = false;
+    this.facePoseCorrection = new THREE.Matrix4();
+    this.targetPoseMatrix = new THREE.Matrix4();
+    this.poseScaleVector = new THREE.Vector3();
   }
 
   setEnabled(enabled) {
@@ -191,6 +194,18 @@ export class BustOverlayModel {
     this.root.quaternion.copy(this.currentQuaternion);
     this.root.scale.setScalar(this.currentScale);
     this.updateVisibility();
+  }
+
+  alignFacePose(faceRoot) {
+    if (!this.enabled || !this.hasPose || !this.root.visible || !faceRoot) return;
+    // Face vertices already contain the target head rotation. Apply only the
+    // difference to the displayed bust pose, never the head rotation twice.
+    this.poseScaleVector.setScalar(this.targetScale);
+    this.targetPoseMatrix.compose(this.targetPosition, this.targetQuaternion, this.poseScaleVector);
+    this.root.updateMatrix();
+    this.facePoseCorrection.copy(this.targetPoseMatrix).invert().premultiply(this.root.matrix);
+    faceRoot.updateMatrix();
+    faceRoot.applyMatrix4(this.facePoseCorrection);
   }
 
   dispose() {

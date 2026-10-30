@@ -21,6 +21,10 @@
       pointer-events: none; transition: opacity 0.8s ease;
     }
     .hud-overlay.faded { opacity: 0; }
+    /* A browser source must never put connection controls into the NDI image. */
+    html.obs-output .hud-overlay,
+    html.obs-output .waiting-screen { display: none !important; }
+    html.obs-output, html.obs-output body { cursor: none; }
     .hud-badge, .hud-btn {
       display: flex; align-items: center; gap: 9px; padding: 8px 14px;
       border: 1px solid rgba(255,255,255,.12); border-radius: 9px;
@@ -52,7 +56,12 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
   </style>
-  <script type="module" crossorigin src="/assets/receiver-TlHp6FnR.js"></script>
+  <script>
+    if (new URLSearchParams(location.search).get('output') === 'obs') {
+      document.documentElement.classList.add('obs-output');
+    }
+  </script>
+  <script type="module" crossorigin src="/assets/receiver-DnVgrLcE.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/modulepreload-polyfill-B5Qt9EMX.js">
 </head>
 <body>
@@ -72,6 +81,6 @@
       <div class="waiting-subtitle">Ce récepteur affiche le flux WebRTC. Activez le son pour entendre les presets. Aucune capture visiteur n’est enregistrée.</div>
     </div>
   </div>
-
+
 </body>
 </html>

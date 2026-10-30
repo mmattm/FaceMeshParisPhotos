@@ -10,19 +10,22 @@ import * as THREE from 'three';
 import { FaceLandmarker } from '@mediapipe/tasks-vision';
 import { buildTrianglesFromTesselation } from './triangulation.js';
 import { BustOverlayModel } from './bustOverlayModel.js';
+import { relaxEyelids } from './relaxedEyelids.js';
+import { centerBustFrame } from './centerBustFrame.js';
 
 export class FaceMeshRenderer {
   constructor(canvasElement, videoElement = null) {
     this.canvas = canvasElement;
     this.videoElement = videoElement;
     this.isMirrored = true;
-    this.showWebcam = true;
+    this.showWebcam = false;
     this.isFaceTextureEnabled = true;
-    this.showBust = false;
+    this.showBust = true;
     this.minimalistMode = false;
+    this.autonomousFallback = false;
     this.autonomousRenderScale = 1;
     this.faceMeshVisible = true;
-    this.faceMeshAlignment = { x: 0, y: -16.5, z: -9, scale: 95.5, pitch: 0, yaw: 0, roll: 0 };
+    this.faceMeshAlignment = { x: 0, y: 3.5, z: -9, scale: 95.5, pitch: 0, yaw: 0, roll: 0 };
     this.normalFaceMeshAlignment = { x: 0, y: 0, z: 0, scale: 100, pitch: 0, yaw: 0, roll: 0 };
 
     // Texture Color Grading (1.0 = normal, 0.90 = -10%, etc.)
@@ -116,6 +119,11 @@ export class FaceMeshRenderer {
 
     // 6. 3D Meshes & Materials
     this.setupMeshes();
+    this.fallbackFaceMaterial = new THREE.MeshStandardMaterial({
+      color: 0xd8b49b, roughness: 0.9, metalness: 0, side: THREE.DoubleSide,
+      depthTest: false,
+      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1
+    });
 
     // 7. Sculptural 3D Eyes & Pupils
     this.setupEyes();
@@ -123,11 +131,12 @@ export class FaceMeshRenderer {
     // 8. Anatomical Black Oral Cavity (Noir dans la bouche)
     this.setupMouth();
     this.setupLandmarkPoints();
+    this.setupFallbackFaceGeometry();
 
     // Keep the photo mask, eye stencil, eyes and mouth aligned as one layer.
     this.faceMeshRoot = new THREE.Group();
     this.faceMeshRoot.name = 'FaceMeshAlignment';
-    this.faceMeshRoot.add(this.maskMesh, this.eyeApertureMesh, this.eyeGroup, this.mouthMesh, this.landmarkPoints);
+    this.faceMeshRoot.add(this.maskMesh, this.eyeApertureMesh, this.eyeGroup, this.mouthMesh, this.landmarkPoints, this.fallbackMouthMesh, this.mouthTeethMesh, this.liveMouthMesh);
     this.scene.add(this.faceMeshRoot);
 
     // 9. Optional male/female OBJ cranium, neck and shoulders behind the mask
@@ -141,6 +150,8 @@ export class FaceMeshRenderer {
     this.videoTexture.generateMipmaps = false;
     this.videoTexture.minFilter = THREE.LinearFilter;
     this.videoTexture.magFilter = THREE.LinearFilter;
+    // The webcam is composited in WebGL so Align 3D has one shared transform.
+    this.videoElement.style.visibility = 'hidden';
   }
 
   setVideoElement(videoEl) {
@@ -260,6 +271,12 @@ export class FaceMeshRenderer {
     }
     this.uvAttribute = new THREE.BufferAttribute(this.uvs, 2);
     this.uvAttribute.setUsage(THREE.DynamicDrawUsage);
+    this.departureLiveUvs = new Float32Array(this.numVertices * 2);
+    this.departureLiveUvAttribute = new THREE.BufferAttribute(this.departureLiveUvs, 2);
+    this.departureLiveUvAttribute.setUsage(THREE.DynamicDrawUsage);
+    this.departureTextureUniforms = {
+      mix: { value: 1 }, liveMap: { value: this.videoTexture || null }
+    };
 
     // Boundary feathering weights (Smooth alpha transition at the outer edge)
     this.featherAlphas = this.buildFeatherWeights();
@@ -269,6 +286,7 @@ export class FaceMeshRenderer {
     this.geometry = new THREE.BufferGeometry();
     this.geometry.setAttribute('position', this.posAttribute);
     this.geometry.setAttribute('uv', this.uvAttribute);
+    this.geometry.setAttribute('departureLiveUv', this.departureLiveUvAttribute);
     this.geometry.setAttribute('featherAlpha', this.featherAttribute);
 
     const indexArray = [];
@@ -339,6 +357,13 @@ if (gl_FragColor.a < 0.005) discard;`
     });
 
     this.textureMaterial.onBeforeCompile = (shader) => {
+      shader.uniforms.uDepartureMix = this.departureTextureUniforms.mix;
+      shader.uniforms.uDepartureLiveMap = this.departureTextureUniforms.liveMap;
+      shader.vertexShader = 'attribute vec2 departureLiveUv;\nvarying vec2 vDepartureLiveUv;\n'
+        + shader.vertexShader.replace('#include <begin_vertex>',
+          '#include <begin_vertex>\nvDepartureLiveUv = departureLiveUv;');
+      shader.fragmentShader = 'uniform float uDepartureMix;\nuniform sampler2D uDepartureLiveMap;\nvarying vec2 vDepartureLiveUv;\n'
+        + shader.fragmentShader;
       // Bind live uniforms
       shader.uniforms.uContrast = this.textureUniforms.uContrast;
       shader.uniforms.uSaturation = this.textureUniforms.uSaturation;
@@ -386,6 +411,21 @@ if (gl_FragColor.a < 0.005) discard;`
       );
     };
 
+    const originalTextureCompile = this.textureMaterial.onBeforeCompile;
+    this.textureMaterial.onBeforeCompile = shader => {
+      originalTextureCompile(shader);
+      shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `
+vec4 departureBaseColor = diffuseColor;
+#include <map_fragment>
+#ifdef USE_MAP
+if (uDepartureMix < 1.0) {
+  vec4 liveColor = texture2D(uDepartureLiveMap, vDepartureLiveUv);
+  liveColor = sRGBTransferEOTF(liveColor);
+  diffuseColor = mix(departureBaseColor * liveColor, diffuseColor, uDepartureMix);
+}
+#endif`);
+    };
+
     // 0. Autonomous 3D Attached Webcam Background Plane
     this.webcamBackgroundGroup = new THREE.Group();
     this.webcamBackgroundGroup.renderOrder = -10;
@@ -408,6 +448,15 @@ if (gl_FragColor.a < 0.005) discard;`
     this.webcamBackgroundGroup.add(this.webcamPlane);
     this.scene.add(this.webcamBackgroundGroup);
 
+    this.liveBackgroundPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({ map: this.videoTexture || null,
+        side: THREE.DoubleSide, depthTest: false, depthWrite: false,
+        toneMapped: false }));
+    this.liveBackgroundPlane.renderOrder = -100;
+    this.liveBackgroundPlane.frustumCulled = false;
+    this.liveBackgroundPlane.visible = false;
+    this.scene.add(this.liveBackgroundPlane);
+
     this.maskMesh = new THREE.Mesh(this.geometry, this.maskMaterial);
     this.maskMesh.renderOrder = 10;
     this.scene.add(this.maskMesh);
@@ -421,7 +470,7 @@ if (gl_FragColor.a < 0.005) discard;`
     this.landmarkGeometry.setDrawRange(0, 0);
     this.landmarkMaterial = new THREE.PointsMaterial({
       color: 0xffffff,
-      size: 2.5,
+      size: 4,
       sizeAttenuation: false,
       depthTest: false,
       depthWrite: false,
@@ -488,9 +537,10 @@ if (gl_FragColor.a < 0.005) discard;`
     this.mouthGeometry.setIndex(mouthTriangles);
 
     this.mouthMaterial = new THREE.MeshBasicMaterial({
-      color: 0x000000, // 50% semi-transparent black overlay
+      color: 0x000000,
       transparent: true,
-      opacity: 0.50,
+      opacity: 1,
+      toneMapped: false,
       side: THREE.DoubleSide,
       depthTest: true,
       depthWrite: false
@@ -500,6 +550,93 @@ if (gl_FragColor.a < 0.005) discard;`
     this.mouthMesh.renderOrder = 8; // Renders right behind mask (10)
     this.mouthMesh.visible = false;
     this.scene.add(this.mouthMesh);
+
+    // Fine subdivisions give the incisors rounded tips and soft enamel shading.
+    this.mouthTeethSegments = 80;
+    const rowVertices = (this.mouthTeethSegments + 1) * 2;
+    this.mouthTeethPositions = new Float32Array(rowVertices * 2 * 3);
+    const teethColors = new Float32Array(this.mouthTeethPositions.length);
+    this.mouthTeethProfile = [];
+    const teethGeometry = new THREE.BufferGeometry();
+    this.mouthTeethAttribute = new THREE.BufferAttribute(this.mouthTeethPositions, 3);
+    teethGeometry.setAttribute('position', this.mouthTeethAttribute);
+    teethGeometry.setAttribute('color', new THREE.BufferAttribute(teethColors, 3));
+    const teethIndices = [];
+    for (let row = 0; row < 2; row++) {
+      for (let i = 0; i <= this.mouthTeethSegments; i++) {
+        const t = i / this.mouthTeethSegments;
+        const arch = Math.pow(Math.sin(Math.PI * t), 0.8);
+        const phase = (t * (row === 0 ? 8 : 10)) % 1;
+        const roundTip = Math.sqrt(Math.max(0, 1 - (phase * 2 - 1) ** 2));
+        const separation = Math.exp(-(Math.min(phase, 1 - phase) ** 2) / 0.003);
+        // Upper incisors have short, almost straight edges rather than scalloped tips.
+        const tipProfile = row === 0 ? 0.96 + roundTip * 0.04 : 0.85 + roundTip * 0.15;
+        const thickness = (row === 0 ? 0.10 : 0.065) * arch * tipProfile;
+        const inset = 0.015 * arch;
+        this.mouthTeethProfile.push({ t, row, inset, thickness });
+        for (let edge = 0; edge < 2; edge++) {
+          const offset = (row * rowVertices + i * 2 + edge) * 3;
+          const shade = (0.94 + roundTip * 0.06) * (1 - separation * 0.10)
+            * (edge === 0 ? 0.82 : 1) * (row === 0 ? 1 : 0.82);
+          teethColors[offset] = 0.78 * shade;
+          teethColors[offset + 1] = 0.75 * shade;
+          teethColors[offset + 2] = 0.67 * shade;
+        }
+        if (i < this.mouthTeethSegments) {
+          const a = row * rowVertices + i * 2;
+          teethIndices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+        }
+      }
+    }
+    teethGeometry.setIndex(teethIndices);
+    this.mouthTeethMesh = new THREE.Mesh(teethGeometry, new THREE.MeshBasicMaterial({
+      color: 0xffffff, vertexColors: true, side: THREE.DoubleSide,
+      transparent: true, depthTest: false, depthWrite: false, toneMapped: false
+    }));
+    this.mouthTeethMesh.renderOrder = 12;
+    this.mouthTeethMesh.frustumCulled = false;
+    this.mouthTeethMesh.visible = false;
+  }
+
+  updateMouthTeeth() {
+    this.mouthTeethMesh.visible = !this.minimalistMode
+      && (this.mouthMesh.visible || this.fallbackMouthMesh.visible);
+    if (!this.mouthTeethMesh.visible) return;
+    const bustArticulation = this.showBust && this.isAutonomousActive;
+    this.mouthTeethMesh.material.color.setScalar(bustArticulation ? 1.04 : 1);
+    const upper = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308];
+    const lower = [78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308];
+    const mouthWidth = Math.hypot(...[0, 1, 2].map(axis =>
+      this.positions[78 * 3 + axis] - this.positions[308 * 3 + axis]));
+    for (let sample = 0; sample < this.mouthTeethProfile.length; sample++) {
+      const { row, t, inset, thickness } = this.mouthTeethProfile[sample];
+      const rim = row === 0 ? upper : lower;
+      const opposite = row === 0 ? lower : upper;
+      const i = Math.min(9, Math.floor(t * 10));
+      const blend = t * 10 - i;
+      const rimPoint = [], oppositePoint = [];
+      for (let axis = 0; axis < 3; axis++) {
+        rimPoint[axis] = this.positions[rim[i] * 3 + axis] * (1 - blend)
+          + this.positions[rim[i + 1] * 3 + axis] * blend;
+        oppositePoint[axis] = this.positions[opposite[i] * 3 + axis] * (1 - blend)
+          + this.positions[opposite[i + 1] * 3 + axis] * blend;
+      }
+      const gap = Math.hypot(...rimPoint.map((value, axis) => oppositePoint[axis] - value));
+      const arch = Math.pow(Math.sin(Math.PI * t), 0.8);
+      // Small speech openings otherwise reduce teeth to a subpixel sliver.
+      // Keep a readable hint while reserving a black gap between both rows.
+      const toothGain = bustArticulation ? 1.25 : 1;
+      const toothFraction = Math.min(row === 0 ? 0.24 : 0.17,
+        Math.max(thickness * toothGain, mouthWidth * (row === 0 ? 0.010 : 0.007) * toothGain * arch / Math.max(gap, 0.001)));
+        for (let axis = 0; axis < 3; axis++) {
+          const edge = rimPoint[axis];
+          const other = oppositePoint[axis];
+          const offset = sample * 6 + axis;
+          this.mouthTeethPositions[offset] = edge + (other - edge) * inset;
+          this.mouthTeethPositions[offset + 3] = edge + (other - edge) * (inset + toothFraction);
+        }
+    }
+    this.mouthTeethAttribute.needsUpdate = true;
   }
 
   /**
@@ -507,6 +644,7 @@ if (gl_FragColor.a < 0.005) discard;`
    * Dynamically adapts depth, palate vaulting, and pharyngeal curvature to mouth aperture.
    */
   updateOralCavity(renderW, renderH, depthScale) {
+    this.updateMouthTeeth();
     if (!this.mouthMesh || !this.mouthMesh.visible || !this.mouthRimIndices) return;
 
     const N = this.mouthRimIndices.length;
@@ -762,7 +900,8 @@ if (gl_FragColor.a < 0.005) discard;`
     const dist = 1000;
 
     const targetX = -x;
-    const targetY = -y;
+    // Lift the complete bust composition while preserving mesh/bust alignment.
+    const targetY = -y - (this.showBust && !this.minimalistMode ? this.canvasHeight * 0.22 : 0);
     const targetZ = 0;
 
     // Base offset orientation strictly from alignment panel (never compounds with live head pose)
@@ -956,15 +1095,96 @@ if (gl_FragColor.a < 0.005) discard;`
     }
   }
 
+  setupFallbackFaceGeometry() {
+    // Fill the eye openings with the aligned portrait instead of leaving holes
+    // through which the sculptural bust would hide the irises.
+    this.fallbackFaceGeometry = new THREE.BufferGeometry();
+    this.fallbackFaceGeometry.setAttribute('position', this.posAttribute);
+    this.fallbackFaceGeometry.setAttribute('uv', this.uvAttribute);
+    this.fallbackFaceGeometry.setIndex([
+      ...this.geometry.index.array, ...this.eyeApertureGeometry.index.array
+    ]);
+    const mouthIndices = [];
+    for (let i = 1; i < this.mouthRimIndices.length - 1; i++) {
+      mouthIndices.push(this.mouthRimIndices[0], this.mouthRimIndices[i], this.mouthRimIndices[i + 1]);
+    }
+    const mouthGeometry = new THREE.BufferGeometry();
+    mouthGeometry.setAttribute('position', this.posAttribute);
+    mouthGeometry.setAttribute('uv', this.uvAttribute);
+    mouthGeometry.setAttribute('departureLiveUv', this.departureLiveUvAttribute);
+    // Normals must exist before sharing them; the first tracked frame updates them.
+    if (!this.geometry.getAttribute('normal')) this.geometry.computeVertexNormals();
+    // Fill the live mouth with the face material itself, instead of layering
+    // a separate patch over the opening and exposing the black cavity below.
+    this.liveFaceGeometry = new THREE.BufferGeometry();
+    for (const [name, attribute] of Object.entries(this.geometry.attributes)) {
+      this.liveFaceGeometry.setAttribute(name, attribute);
+    }
+    this.liveFaceGeometry.setIndex([
+      ...this.geometry.index.array, ...mouthIndices
+    ]);
+    mouthGeometry.setAttribute('normal', this.geometry.getAttribute('normal'));
+    mouthGeometry.setAttribute('featherAlpha', this.geometry.getAttribute('featherAlpha'));
+    mouthGeometry.setIndex(mouthIndices);
+    this.liveMouthMaterial = this.textureMaterial.clone();
+    this.liveMouthMaterial.onBeforeCompile = this.textureMaterial.onBeforeCompile;
+    this.liveMouthMaterial.depthTest = false;
+    this.liveMouthMaterial.depthWrite = false;
+    const liveMouthGeometry = mouthGeometry.clone();
+    liveMouthGeometry.setAttribute('position', this.posAttribute);
+    liveMouthGeometry.setAttribute('normal', this.geometry.getAttribute('normal'));
+    liveMouthGeometry.setAttribute('uv', this.departureLiveUvAttribute);
+    liveMouthGeometry.setAttribute('departureLiveUv', this.departureLiveUvAttribute);
+    this.liveMouthMesh = new THREE.Mesh(liveMouthGeometry, new THREE.MeshBasicMaterial({
+      map: this.videoTexture, side: THREE.DoubleSide,
+      depthTest: false, depthWrite: false, toneMapped: false
+    }));
+    this.liveMouthMesh.renderOrder = 11;
+    this.autonomousMouthMaterial = this.liveMouthMesh.material;
+    this.liveMouthMesh.visible = false;
+    this.liveMouthMesh.frustumCulled = false;
+    this.fallbackMouthMesh = new THREE.Mesh(mouthGeometry,
+      new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide,
+        transparent: true, depthTest: false, depthWrite: false, toneMapped: false }));
+    this.fallbackMouthMesh.renderOrder = 11;
+    this.fallbackMouthMesh.visible = false;
+    this.fallbackMouthMesh.frustumCulled = false;
+  }
+
+  async loadFallbackFaceTexture(tracker) {
+    const image = new Image();
+    image.src = '/models/fallback-face-v1.png';
+    await image.decode();
+    const landmarks = tracker.detectReferenceLandmarks(image);
+    if (!landmarks || landmarks.length < 468) {
+      throw new Error('Le visage de secours ne peut pas être aligné sur le FaceMesh.');
+    }
+    this.fallbackTextureLandmarks = landmarks.map(point => ({ ...point }));
+    const texture = new THREE.Texture(image);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+    this.fallbackFaceMaterial.map = texture;
+    this.fallbackFaceMaterial.color.setHex(0xffffff);
+    this.fallbackFaceMaterial.needsUpdate = true;
+  }
+
+  setAutonomousFallback(enabled) {
+    this.autonomousFallback = !!enabled;
+    if (enabled) this.unfreezeFaceTexture();
+    this.bustOverlay?.setEnabled(this.showBust && !this.minimalistMode);
+    this.updateVisibility();
+  }
+
   setShowBust(show) {
     this.showBust = !!show;
+    this.updateCameraTransform();
     this.bustOverlay?.setEnabled(this.showBust && !this.minimalistMode);
     this.updateVisibility();
   }
 
   setMinimalistMode(enabled) {
     this.minimalistMode = !!enabled;
-    this.renderer.setClearColor(0x000000, this.minimalistMode ? 1 : 0);
+    this.updateCameraTransform();
     this.bustOverlay?.setEnabled(this.showBust && !this.minimalistMode);
     this.updateVisibility();
     this.clear();
@@ -979,11 +1199,8 @@ if (gl_FragColor.a < 0.005) discard;`
   }
 
   updateAutonomousFraming(trackingResult) {
-    // Enlarge the complete composition while preserving face/bust alignment.
-    const weight = THREE.MathUtils.clamp(trackingResult.isAutonomous
-      ? (trackingResult.autonomousBlendWeight ?? 1)
-      : (trackingResult.blendToLiveWeight ?? 0), 0, 1);
-    this.autonomousRenderScale = 1 + 0.25 * weight;
+    // Keep the operator's camera framing fixed in live and autonomous modes.
+    this.autonomousRenderScale = 1;
     const zoom = Math.max(0.1, this.cameraOffset.zoom || 1) * this.autonomousRenderScale;
     if (this.camera.zoom !== zoom) {
       this.camera.zoom = zoom;
@@ -1010,6 +1227,24 @@ if (gl_FragColor.a < 0.005) discard;`
     root.position.set(0, 0, 0);
     root.scale.setScalar(1);
     root.quaternion.identity();
+
+    if (this.minimalistMode) {
+      if (this.mouthTeethMesh) this.mouthTeethMesh.visible = false;
+      // Use the same centered reference for live and autonomous points.
+      // The Minimalist Align 3D camera profile applies on top of this centering.
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      const count = this.landmarkGeometry.drawRange.count;
+      for (let i = 0; i < Math.min(count, this.numVertices); i++) {
+        minX = Math.min(minX, this.positions[i * 3]);
+        maxX = Math.max(maxX, this.positions[i * 3]);
+        minY = Math.min(minY, this.positions[i * 3 + 1]);
+        maxY = Math.max(maxY, this.positions[i * 3 + 1]);
+      }
+      if (Number.isFinite(minX) && Number.isFinite(minY)) {
+        root.position.set(-(minX + maxX) * 0.5, -(minY + maxY) * 0.5, 0);
+      }
+      return;
+    }
 
     // Use the tracked head axes so the adjustment follows turns and head size.
     const point = index => {
@@ -1049,25 +1284,51 @@ if (gl_FragColor.a < 0.005) discard;`
   }
 
   updateVisibility() {
+    if (this.minimalistMode) {
+      if (this.mouthTeethMesh) this.mouthTeethMesh.visible = false;
+      if (this.liveBackgroundPlane) this.liveBackgroundPlane.visible = false;
+      if (this.fallbackMouthMesh) this.fallbackMouthMesh.visible = false;
+    }
+    // Render the bust background into the canvas so OBS receives the same gray.
+    const bustBackground = this.showBust && !this.minimalistMode;
+    this.renderer.setClearColor(bustBackground ? 0x242424 : 0x000000,
+      (bustBackground || this.minimalistMode) ? 1 : 0);
     if (this.webcamBackgroundGroup) {
-      this.webcamBackgroundGroup.visible = !this.minimalistMode && !this.showBust && this.showWebcam && this.isAutonomousActive;
+      this.webcamBackgroundGroup.visible = !this.autonomousFallback && !this.minimalistMode && !this.showBust && this.showWebcam && this.isAutonomousActive;
     }
 
-    const showSurface = this.faceMeshVisible && !this.minimalistMode;
+    const showSurface = (this.showBust || !!this.isAutonomousActive) && !this.minimalistMode
+      && (this.autonomousFallback || this.faceMeshVisible);
     this.maskMesh.visible = showSurface;
-    this.eyeGroup.visible = showSurface;
-    if (this.landmarkPoints) this.landmarkPoints.visible = this.faceMeshVisible && this.minimalistMode;
+    this.eyeGroup.visible = showSurface && !this.autonomousFallback;
+    if (this.landmarkPoints) this.landmarkPoints.visible = this.minimalistMode;
     if (this.eyeApertureMesh) {
       this.eyeApertureMesh.visible = this.eyeGroup.visible;
     }
     if (this.mouthMesh) {
-      this.mouthMesh.visible = showSurface && !!this.isAutonomousActive;
+      this.mouthMesh.visible = showSurface && !this.useLiveMouthTexture && !this.autonomousFallback;
+    }
+    if (this.fallbackMouthMesh) {
+      this.fallbackMouthMesh.visible = showSurface && !this.useLiveMouthTexture;
+    }
+    if (this.liveMouthMesh) {
+      // Match the face's lighting and transparency in Live, avoiding a bright patch.
+      this.liveMouthMesh.material = this.isAutonomousActive
+        ? this.autonomousMouthMaterial : this.liveMouthMaterial;
+      const mouthTexture = this.videoTexture;
+      this.liveMouthMesh.visible = false;
+      this.liveMouthMesh.material.map = mouthTexture;
     }
 
     // Always use textured material when available, fallback to maskMaterial before texture is loaded
-    if (this.videoTexture || this.freezeTexture) {
+    if (this.autonomousFallback) {
+      this.maskMesh.geometry = this.fallbackFaceGeometry;
+      this.maskMesh.material = this.fallbackFaceMaterial;
+    } else if (this.videoTexture || this.freezeTexture) {
+      this.maskMesh.geometry = this.useLiveMouthTexture ? this.liveFaceGeometry : this.geometry;
       this.maskMesh.material = this.textureMaterial;
     } else {
+      this.maskMesh.geometry = this.geometry;
       this.maskMesh.material = this.maskMaterial;
     }
 
@@ -1088,7 +1349,50 @@ if (gl_FragColor.a < 0.005) discard;`
   }
 
   clear() {
+    this.hasRenderedPortrait = false;
+    this.portraitFadeStartedAt = null;
     this.renderer.clear(true, true, true);
+  }
+
+  beginPortraitCrossfade() {
+    if (!this.portraitFadeCanvas) {
+      this.portraitFadeCanvas = document.createElement('canvas');
+      this.portraitFadeContext = this.portraitFadeCanvas.getContext('2d');
+      this.portraitFadeTexture = new THREE.CanvasTexture(this.portraitFadeCanvas);
+      this.portraitFadeTexture.colorSpace = THREE.SRGBColorSpace;
+      this.portraitFadeMaterial = new THREE.MeshBasicMaterial({
+        map: this.portraitFadeTexture, transparent: true,
+        depthTest: false, depthWrite: false, toneMapped: false
+      });
+      this.portraitFadeScene = new THREE.Scene();
+      this.portraitFadeCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 2);
+      const overlay = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.portraitFadeMaterial);
+      overlay.position.z = -1;
+      this.portraitFadeScene.add(overlay);
+    }
+    this.portraitFadeCanvas.width = this.canvas.width;
+    this.portraitFadeCanvas.height = this.canvas.height;
+    // Capture the previous composited frame, including any interrupted fade.
+    this.portraitFadeContext.drawImage(this.canvas, 0, 0);
+    this.portraitFadeTexture.needsUpdate = true;
+    this.portraitFadeStartedAt = performance.now();
+  }
+
+  renderPortraitCrossfade() {
+    if (this.portraitFadeStartedAt == null) return;
+    const progress = Math.min(1, (performance.now() - this.portraitFadeStartedAt) / 550);
+    if (progress >= 1 || this.minimalistMode) {
+      this.portraitFadeStartedAt = null;
+      return;
+    }
+    this.portraitFadeMaterial.opacity = 1 - progress * progress * (3 - 2 * progress);
+    const autoClear = this.renderer.autoClear;
+    this.renderer.autoClear = false;
+    try {
+      this.renderer.render(this.portraitFadeScene, this.portraitFadeCamera);
+    } finally {
+      this.renderer.autoClear = autoClear;
+    }
   }
 
   /**
@@ -1099,6 +1403,18 @@ if (gl_FragColor.a < 0.005) discard;`
    */
   update3DEyes(landmarks, renderW, renderH, depthScale) {
     if (!this.eyeGroup.visible) return;
+
+    const now = performance.now();
+    if (this.lastEyeAutonomousMode !== undefined
+      && this.lastEyeAutonomousMode !== this.isAutonomousActive) {
+      this.eyeGazeTransitionStart = now;
+      for (const rig of [this.leftEyeRig, this.rightEyeRig]) {
+        if (rig?.displayedGazeOffset) rig.gazeTransitionFrom = rig.displayedGazeOffset.clone();
+      }
+    }
+    this.lastEyeAutonomousMode = this.isAutonomousActive;
+    const gazeProgress = Math.min(1, (now - (this.eyeGazeTransitionStart ?? -Infinity)) / 600);
+    const gazeBlend = gazeProgress * gazeProgress * (3 - 2 * gazeProgress);
 
     const get3D = (idx) => {
       const lm = landmarks[idx];
@@ -1185,8 +1501,16 @@ if (gl_FragColor.a < 0.005) discard;`
       const maxGazeOffsetX = Math.max(2, (eyeWidth * 0.48) - (pupilRadius * 1.15));
       const maxGazeOffsetY = Math.max(2, (eyeHeight * 0.48) - (pupilRadius * 1.15));
 
-      const irisX = pCenter.x + Math.max(-maxGazeOffsetX, Math.min(maxGazeOffsetX, pIris.x - pCenter.x));
-      const irisY = pCenter.y + Math.max(-maxGazeOffsetY, Math.min(maxGazeOffsetY, pIris.y - pCenter.y));
+      const gazeOffset = new THREE.Vector2(
+        (pIris.x - pCenter.x) / eyeWidth,
+        (pIris.y - pCenter.y) / eyeWidth
+      );
+      if (gazeProgress < 1 && eyeRig.gazeTransitionFrom) {
+        gazeOffset.lerpVectors(eyeRig.gazeTransitionFrom, gazeOffset.clone(), gazeBlend);
+      }
+      const irisX = pCenter.x + Math.max(-maxGazeOffsetX, Math.min(maxGazeOffsetX, gazeOffset.x * eyeWidth));
+      const irisY = pCenter.y + Math.max(-maxGazeOffsetY, Math.min(maxGazeOffsetY, gazeOffset.y * eyeWidth));
+      eyeRig.displayedGazeOffset = new THREE.Vector2((irisX - pCenter.x) / eyeWidth, (irisY - pCenter.y) / eyeWidth);
 
       // Project tracked (irisX, irisY) onto the spherical surface of the sclera
       const dx = irisX - ballCenter.x;
@@ -1259,11 +1583,38 @@ if (gl_FragColor.a < 0.005) discard;`
       return;
     }
 
-    const { landmarks, liveLandmarks } = trackingResult;
+    if (this.hasRenderedPortrait && !this.minimalistMode
+      && this.lastRenderedFallback !== this.autonomousFallback) {
+      this.beginPortraitCrossfade();
+    }
+
+    if (this.showBust && !this.minimalistMode) {
+      const { renderW, renderH } = this.getVideoMetrics();
+      trackingResult = centerBustFrame(trackingResult, renderW / Math.max(1, renderH));
+    }
+
+    const { landmarks: sourceLandmarks, liveLandmarks } = trackingResult;
+    this.departureTextureUniforms.mix.value = this.isTextureFrozen && this.videoTexture
+      ? (trackingResult.departureTextureMix ?? 1) : 1;
+    this.departureTextureUniforms.liveMap.value = this.videoTexture || null;
+    const visitorBust = this.showBust && !this.autonomousFallback;
+    const preserveLiveFeatures = !trackingResult.isAutonomous
+      && (trackingResult.liveTexturePreferred || !this.isTextureFrozen);
+    const eyelidReduction = visitorBust
+      ? (trackingResult.isAutonomous ? -0.20 : 0.08)
+      : (trackingResult.isAutonomous ? -0.40 : (this.showBust ? 0.14 : 0.22));
+    const eyeNow = performance.now();
+    const eyeDelta = Math.min(0.1, Math.max(0, (eyeNow - (this.lastEyelidRenderTime ?? eyeNow)) / 1000));
+    this.lastEyelidRenderTime = eyeNow;
+    this.displayedEyelidReduction ??= eyelidReduction;
+    this.displayedEyelidReduction += (eyelidReduction - this.displayedEyelidReduction)
+      * (1 - Math.exp(-eyeDelta / 0.18));
+    const landmarks = preserveLiveFeatures ? sourceLandmarks
+      : relaxEyelids(sourceLandmarks, this.displayedEyelidReduction);
     if (liveLandmarks) {
       this.lastLiveLandmarks = liveLandmarks;
     } else if (landmarks) {
-      this.lastLiveLandmarks = landmarks;
+      this.lastLiveLandmarks = sourceLandmarks;
     }
 
     const { renderW, renderH } = this.getVideoMetrics();
@@ -1273,9 +1624,11 @@ if (gl_FragColor.a < 0.005) discard;`
     const depthScale = renderW * 1.10;
 
     // UV coordinates source for live face texture warping
-    const uvSource = (this.isTextureFrozen && this.frozenLandmarks)
-      ? this.frozenLandmarks
-      : (liveLandmarks || landmarks);
+    const uvSource = this.autonomousFallback && this.fallbackTextureLandmarks
+      ? this.fallbackTextureLandmarks
+      : (this.isTextureFrozen && this.frozenLandmarks)
+        ? this.frozenLandmarks
+        : (liveLandmarks || sourceLandmarks);
 
     // Update 3D vertex buffer and UV map perfectly aligned with the video frame
     for (let i = 0; i < len; i++) {
@@ -1289,15 +1642,21 @@ if (gl_FragColor.a < 0.005) discard;`
       const uvLm = uvSource[i] || lm;
       this.uvs[i * 2] = uvLm.x;
       this.uvs[i * 2 + 1] = 1.0 - uvLm.y;
+      const liveUv = liveLandmarks?.[i] || sourceLandmarks[i];
+      this.departureLiveUvs[i * 2] = liveUv.x;
+      this.departureLiveUvs[i * 2 + 1] = 1 - liveUv.y;
     }
 
     this.posAttribute.needsUpdate = true;
     this.landmarkGeometry.setDrawRange(0, len);
     this.uvAttribute.needsUpdate = true;
+    this.departureLiveUvAttribute.needsUpdate = true;
     this.geometry.computeVertexNormals();
+    if (this.autonomousFallback) this.fallbackFaceGeometry.computeVertexNormals();
 
     // Live video texture refresh
-    const needsTexture = this.isFaceTextureEnabled && !this.isTextureFrozen;
+    const needsTexture = this.isFaceTextureEnabled
+      && (!this.isTextureFrozen || trackingResult.liveTexturePreferred);
     if (needsTexture && this.videoTexture) {
       this.videoTexture.needsUpdate = true;
     }
@@ -1306,20 +1665,32 @@ if (gl_FragColor.a < 0.005) discard;`
       this.lastHeadPose = trackingResult.headPose;
     }
 
-    // Update 3D Eyeballs, Irises, and Pupils
-    this.update3DEyes(landmarks, renderW, renderH, depthScale);
-
     const isAutonomous = !!trackingResult.isAutonomous;
     this.isAutonomousActive = isAutonomous;
+    this.useLiveMouthTexture = !isAutonomous
+      && (trackingResult.liveTexturePreferred || !this.isTextureFrozen);
+    this.updateVisibility();
 
-    // Keep the live mouth texture unobscured; use the dark cavity only in autonomous mode.
-    this.mouthMesh.visible = this.faceMeshVisible && !this.minimalistMode && isAutonomous;
+    // Update 3D Eyeballs, Irises, and Pupils only when their mask is visible.
+    this.update3DEyes(landmarks, renderW, renderH, depthScale);
+    this.liveBackgroundPlane.visible = !isAutonomous && !this.minimalistMode
+      && !this.showBust && this.showWebcam && !!this.videoTexture;
+    this.liveBackgroundPlane.material.map = this.videoTexture;
+    this.liveBackgroundPlane.scale.set(this.isMirrored ? -renderW : renderW, renderH, 1);
+
+    // Captured portraits need synthetic teeth in Live as well as autonomous.
+    const showMouthInterior = !this.useLiveMouthTexture;
+    this.mouthMesh.visible = this.faceMeshVisible && !this.minimalistMode && showMouthInterior && !this.autonomousFallback;
+    // Share the aperture fill across both portraits. Composite it and the teeth
+    // after the transparent visitor texture, which otherwise paints over them.
+    this.fallbackMouthMesh.visible = !this.minimalistMode
+      && (this.faceMeshVisible || this.autonomousFallback) && showMouthInterior;
     this.updateOralCavity(renderW, renderH, depthScale);
 
     // Autonomous 3D Attached Webcam Plane Update
     const blendToLiveWeight = trackingResult.blendToLiveWeight !== undefined ? trackingResult.blendToLiveWeight : null;
     const isReturningToLive = blendToLiveWeight !== null && blendToLiveWeight > 0.005;
-    const shouldShowPlane = !this.minimalistMode && !this.showBust && this.showWebcam && (isAutonomous || isReturningToLive) && (this.freezeTexture || this.videoTexture);
+    const shouldShowPlane = !this.autonomousFallback && !this.minimalistMode && !this.showBust && this.showWebcam && (isAutonomous || isReturningToLive) && (this.freezeTexture || this.videoTexture);
 
     if (this.webcamBackgroundGroup) {
       if (shouldShowPlane) {
@@ -1391,9 +1762,13 @@ if (gl_FragColor.a < 0.005) discard;`
     // Optional OBJ layer follows the exact same tracked/autonomous head frame.
     this.bustOverlay?.update(trackingResult.poseLandmarks || landmarks, renderW, renderH, depthScale, this.isMirrored);
     this.updateFaceMeshAlignment(trackingResult.poseLandmarks, renderW, renderH, depthScale);
+    if (this.showBust && !this.minimalistMode) this.bustOverlay?.alignFacePose(this.faceMeshRoot);
     this.updateAutonomousFraming(trackingResult);
 
     // Render WebGL scene
     this.renderer.render(this.scene, this.camera);
+    this.renderPortraitCrossfade();
+    this.lastRenderedFallback = this.autonomousFallback;
+    this.hasRenderedPortrait = !this.minimalistMode;
   }
 }

@@ -4,6 +4,10 @@ import { WebSocketServer } from 'ws';
 import { KokoroTTS } from 'kokoro-js';
 import { encodeWAV } from './src/tts/wavEncoder.js';
 import { audioLibraryPlugin } from './src/server/audioLibraryPlugin.js';
+import { randomizeComfySeeds } from './src/server/comfySeeds.js';
+import { uploadComfyVisitorImage } from './src/server/comfyVisitorImage.js';
+import { normalizePeerAddress, sendNewVisitorOsc } from './src/server/visitorOsc.js';
+import { ComfyLatestRequest } from './src/server/comfyLatestRequest.js';
 
 let kokoroTTSInstance = null;
 async function getKokoro() {
@@ -256,7 +260,37 @@ function webrtcSignalingPlugin() {
       const viewerSockets = new Map();
       let nextViewerSeq = 1;
 
-      wss.on('connection', (ws) => {
+      const sendVisitorOsc = async (oscAddress = '/newVisitor') => {
+        const destinations = new Set([process.env.TD_OSC_HOST || '192.168.50.2']);
+        const port = Number(process.env.TD_OSC_PORT || 9000);
+        await Promise.all([...destinations].map(host => sendNewVisitorOsc(host, port, oscAddress)));
+        return { destinations: [...destinations], port, oscAddress };
+      };
+
+      server.middlewares.use('/api/osc/test', async (req, res) => {
+        res.setHeader('Content-Type', 'application/json');
+        if (req.method !== 'POST') {
+          res.statusCode = 405;
+          res.end(JSON.stringify({ error: 'POST requis' }));
+          return;
+        }
+        try {
+          const signal = new URL(req.url, 'http://localhost').searchParams.get('signal') || 'newVisitor';
+          if (!['newVisitor', 'generationDone'].includes(signal)) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ error: 'Signal OSC inconnu' }));
+            return;
+          }
+          const result = await sendVisitorOsc(`/${signal}`);
+          res.end(JSON.stringify(result));
+        } catch (error) {
+          res.statusCode = 503;
+          res.end(JSON.stringify({ error: error.message }));
+        }
+      });
+
+      wss.on('connection', (ws, request) => {
+        ws.visitorOscAddress = normalizePeerAddress(request.socket.remoteAddress || '');
         let assignedRole = null;
         let assignedViewerId = null;
 
@@ -304,6 +338,7 @@ function webrtcSignalingPlugin() {
                 broadcasterWs.send(JSON.stringify(msg));
               }
             } else if (msg.type === 'new-visitor-alert') {
+              if (ws !== broadcasterWs || assignedRole !== 'broadcaster') return;
               for (const [vid, vWs] of viewerSockets.entries()) {
                 if (vWs.readyState === 1) {
                   vWs.send(JSON.stringify(msg));
@@ -360,7 +395,7 @@ function comfyUiServerPlugin() {
     let size = 0;
     req.on('data', chunk => {
       size += chunk.length;
-      if (size > 1024 * 1024) {
+      if (size > 16 * 1024 * 1024) {
         reject(new Error('Requête trop volumineuse'));
         req.destroy();
         return;
@@ -387,6 +422,7 @@ function comfyUiServerPlugin() {
     }
   };
 
+  const latestComfyRequest = new ComfyLatestRequest(comfyFetch);
   const installMiddleware = (server) => {
     server.middlewares.use(async (req, res, next) => {
       if (!req.url.startsWith('/api/comfy')) return next();
@@ -410,6 +446,33 @@ function comfyUiServerPlugin() {
           return;
         }
 
+        if (req.method === 'POST' && requestUrl.pathname === '/api/comfy/status') {
+          const body = await readJsonBody(req);
+          const baseUrl = normalizeBaseUrl(body.baseUrl);
+          if (!body.promptId || typeof body.promptId !== 'string') throw new Error('Prompt ID manquant');
+          const response = await comfyFetch(`${baseUrl}/history/${encodeURIComponent(body.promptId)}`);
+          if (!response.ok) throw new Error(`ComfyUI répond ${response.status}`);
+          const history = (await response.json())[body.promptId];
+          const status = history?.status;
+          const failure = status?.messages?.find(([type]) =>
+            type === 'execution_error' || type === 'execution_interrupted');
+          const failed = status?.status_str === 'error' || !!failure;
+          res.end(JSON.stringify({
+            state: failed ? 'error' : status?.completed ? 'completed' : 'pending',
+            outputs: history?.outputs || {},
+            error: failed ? failure?.[1]?.exception_message || 'Rendu interrompu ou en échec' : null
+          }));
+          return;
+        }
+
+        if (req.method === 'POST' && requestUrl.pathname === '/api/comfy/cancel') {
+          const body = await readJsonBody(req);
+          const baseUrl = normalizeBaseUrl(body.baseUrl);
+          const result = await latestComfyRequest.replace(baseUrl, async () => ({ cancelled: true }));
+          res.end(JSON.stringify(result));
+          return;
+        }
+
         if (req.method === 'POST' && requestUrl.pathname === '/api/comfy/queue') {
           const body = await readJsonBody(req);
           const baseUrl = normalizeBaseUrl(body.baseUrl);
@@ -419,33 +482,40 @@ function comfyUiServerPlugin() {
             throw new Error('Aucun workflow JSON valide trouvé dans comfyWorkflow/');
           }
 
-          const stored = JSON.parse(fs.readFileSync(path.join(workflowDir, requested), 'utf-8'));
-          const prompt = stored.prompt && typeof stored.prompt === 'object'
-            ? stored.prompt
-            : stored.workflow && typeof stored.workflow === 'object'
-              ? stored.workflow
-              : stored;
-          const clientId = `photomaton_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-          const response = await comfyFetch(`${baseUrl}/prompt`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt, client_id: clientId })
+          const submission = await latestComfyRequest.replace(baseUrl, async isCurrent => {
+            const stored = JSON.parse(fs.readFileSync(path.join(workflowDir, requested), 'utf-8'));
+            const prompt = stored.prompt && typeof stored.prompt === 'object'
+              ? stored.prompt
+              : stored.workflow && typeof stored.workflow === 'object'
+                ? stored.workflow
+                : stored;
+            await uploadComfyVisitorImage(prompt, body.visitorImage, comfyFetch, baseUrl);
+            if (!isCurrent()) return { superseded: true };
+            const seeds = randomizeComfySeeds(prompt);
+            const clientId = `photomaton_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            const response = await comfyFetch(`${baseUrl}/prompt`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ prompt, client_id: clientId })
+            });
+            const responseText = await response.text();
+            let result = {};
+            try { result = responseText ? JSON.parse(responseText) : {}; } catch (error) {}
+            if (!response.ok) {
+              const detail = result.error?.message || result.error || responseText || `HTTP ${response.status}`;
+              throw new Error(`ComfyUI: ${String(detail).slice(0, 500)}`);
+            }
+  
+            return {
+              success: true,
+              workflowFilename: requested,
+              seeds,
+              promptId: result.prompt_id || null,
+              number: result.number ?? null
+            };
           });
-          const responseText = await response.text();
-          let result = {};
-          try { result = responseText ? JSON.parse(responseText) : {}; } catch (error) {}
-          if (!response.ok) {
-            const detail = result.error?.message || result.error || responseText || `HTTP ${response.status}`;
-            throw new Error(`ComfyUI: ${String(detail).slice(0, 500)}`);
-          }
-
           res.statusCode = 200;
-          res.end(JSON.stringify({
-            success: true,
-            workflowFilename: requested,
-            promptId: result.prompt_id || null,
-            number: result.number ?? null
-          }));
+          res.end(JSON.stringify(submission));
           return;
         }
 

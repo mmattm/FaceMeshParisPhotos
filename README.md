@@ -19,7 +19,7 @@ Le système capture en direct les expressions faciales, les micro-mouvements et 
 
 Lorsque personne n'est détecté, ou en transition subtile, le masque entre en **Mode Autonome** : il explore l'espace avec des micro-saccades oculaires naturelles, un réflexe vestibulo-oculaire (VOR), des clignements anatomiques complets et joue les cinq animations prédéfinies sans audio du catalogue fourni.
 
-Dès qu'un **Nouveau Visiteur** est détecté (changement biométrique crânien drastique après absence), le système met à jour sa référence faciale, signale l'événement au récepteur **WebRTC** et peut lancer automatiquement un workflow **ComfyUI**. Aucune image visiteur n'est enregistrée.
+Dès le premier visage, puis au retour après au moins **3 secondes sans visage détecté**, une nouvelle visite démarre, même si la même personne revient. Le délai est réglable de 1 à 10 secondes avec **Absence visiteur**. Aucune comparaison de visages n'est effectuée. Le système met à jour sa référence faciale, signale l'événement au récepteur **WebRTC** et peut lancer automatiquement un workflow **ComfyUI**. Sortir du carré de sortie ou forcer le mode autonome ne compte pas comme une absence tant que la webcam détecte encore le visage.
 
 ---
 
@@ -59,15 +59,15 @@ Dès qu'un **Nouveau Visiteur** est détecté (changement biométrique crânien 
 - **Serveur de Signalement WebSocket Intégré** : Relais instantané d'offres/réponses SDP et candidats ICE via Vite.
 - **Interface Récepteur Plein Écran** : Page dédiée [`receiver.html`](./receiver.html) pour afficher le flux sur une seconde machine via le réseau local avec indicateur de connexion discret.
 
-### Mode optionnel Buste 3D
+### Affichage Buste 3D permanent
 - **Minimaliste** : Le bouton **⚪ Minimaliste** en bas affiche uniquement les 478 points blancs du FaceMesh sur fond noir, localement et dans la sortie WebRTC. L’image caméra, le buste, la texture, les yeux 3D et la cavité buccale sont masqués ; le suivi, la capture de référence et les animations restent actifs. Le buste est indisponible pendant ce mode et retrouve son état prévu à la désactivation. Ce mode peut servir pendant l’attente d’une image ComfyUI ; son activation et sa désactivation sont manuelles pour l’instant.
-- Le mode **Buste 3D** s’active automatiquement en Autonome et se désactive au retour en Live. Le bouton **Buste 3D** permet aussi de tester manuellement cet affichage, avec un modèle OBJ comprenant le crâne, le cou et les épaules derrière le masque photo.
-- **Cliché requis** : Le mode autonome et les tests d’animations sont désactivés tant qu’aucun cliché FaceMesh du visiteur actuel n’est mémorisé. Une ancienne référence archivée ne suffit pas à les activer pour un nouveau visiteur.
+- Le **Buste 3D** reste affich? en Live et en Autonome. La webcam alimente en arri?re-plan le suivi, les captures et la texture du visage ; son image compl?te est masqu?e dans le navigateur et en WebRTC. Le bouton Buste a ?t? retir?.
+- **Secours sans cliché** : Le mode autonome et les tests d’animations fonctionnent même avant toute capture. Sans cliché du visiteur actuel, un visage standard MediaPipe plein avec une texture générique anime le buste. La texture est alignée automatiquement sur les points du visage au démarrage pour rendre les yeux, le nez et la bouche lisibles par un logiciel qui analyse la sortie vidéo. Dès qu’un cliché est disponible, les prochaines activations utilisent sa texture. Une ancienne photo de visiteur n’est jamais utilisée pour ce secours. Si la texture ne charge pas, un visage plein reste affiché.
 - Le mode utilise `public/models/male_facemesh_zone_creusee.obj`.
-- Le panneau **FaceMesh** ajuste le visage dans le mode actif, indiqué en haut du panneau : **Mode normal** pour l’aligner sur l’image caméra, ou **Buste 3D** pour l’aligner sur le buste. Ouvrir ce panneau conserve le mode courant. Chaque mode dispose de sa position, sa taille et ses inclinaisons (haut/bas, gauche/droite et roulis en degrés), mémorisées séparément dans ce navigateur avec **Save**. Les inclinaisons pivotent autour du milieu des yeux et suivent l’orientation de la tête. Les anciens réglages du buste sont conservés. Par défaut, le mode normal reste neutre (`x/y/z: 0`, taille `100 %`, angles `0°`) ; le buste garde `x: 0`, `y: -16.5`, `z: -9` (en % de l’écart entre les yeux), taille `95.5 %`, angles `0°`. **Réinitialiser** rétablit les valeurs par défaut du mode actif ; cliquez ensuite sur **Save** pour les conserver.
+- Le panneau **FaceMesh** ajuste la position, la taille et les inclinaisons du visage sur le buste. **Save** m?morise les r?glages dans ce navigateur ; les r?glages de buste pr?c?dents sont conserv?s.
 - En mode autonome, la tête explore librement les deux côtés et varie son inclinaison, y compris pendant les presets ; les gestes des animations s’ajoutent à ce mouvement avec des transitions fluides.
-- Le rendu autonome agrandit l’ensemble visage et buste de 25 %, avec une transition progressive à l’entrée et au retour en Live. Cet agrandissement apparaît aussi dans la sortie WebRTC.
-- Le buste suit automatiquement la position, l'échelle et la rotation du visage en Live comme en mode Autonome, et apparaît également dans la sortie WebRTC. Lorsqu'il est actif, l'image webcam complète est masquée : elle continue uniquement d'alimenter la texture photo du masque, affiché avec le buste sur fond noir.
+- Le cadrage reste identique en Live et en Autonome. Le retour au suivi du visiteur utilise une transition progressive ; les pertes de suivi de moins de 180 ms sont tol?r?es pour limiter les bascules intempestives.
+- Le buste suit la position, l??chelle et la rotation du visage en Live comme en Autonome, avec la m?me composition en WebRTC.
 
 ### 5. Détecteur Biométrique de Nouveau Visiteur (`VisitorDetector`)
 - **ID de session visiteur** : Affiché en version courte en haut, à côté de `STATE`. Cliquez dessus pour copier l’ID complet, également disponible au survol, dans la console et dans les alertes WebRTC (`visitorId`). Il reste identique pendant la session et le mode autonome ; une nouvelle détection ou le bouton **Test visiteur** génère un nouvel ID aléatoire. Il ne constitue pas une identité permanente pour reconnaître une personne lors de visites ultérieures.
@@ -108,7 +108,7 @@ prototype_v2/
     │   ├── renderer.js          # Rendu Three.js (Masque 3D, Stencil Yeux, Cavité Buccale)
     │   ├── autonomousGazeEngine.js # Moteur de comportement, regard, VOR & clignements
     │   ├── animationLibrary.js  # Gestionnaire de chargement / sauvegarde d'animations
-    │   ├── visitorDetector.js   # Détection biométrique crânienne de nouveau visiteur
+    │   ├── visitorDetector.js   # Nouvelle visite au retour après absence
     │   ├── faceTextureHistoryBuffer.js # Tampon d'image frontale idéale sans obstruction
     │   └── triangulation.js     # Topologie canonique du maillage facial 3D
     │
@@ -174,6 +174,31 @@ Les bundles optimisés pour `index.html` et `receiver.html` sont générés dans
 - **Réglages ComfyUI** : Le bouton `⚙ ComfyUI` permet de saisir l'adresse de l'instance, choisir un JSON placé dans `comfyWorkflow/`, tester la connexion, exécuter le workflow immédiatement et activer son lancement automatique lors d'un nouveau visiteur.
 - **Align 3D — Save** : Mémorise la position X/Y, les trois angles et le zoom dans ce navigateur, puis les restaure au rechargement. Les ajustements restent temporaires jusqu’au clic sur **Save**, y compris **Tout réinitialiser** : cliquez sur **Save** après la remise à zéro pour la conserver.
 
+### TouchDesigner : nouveau visiteur sur PC 2
+
+Le serveur de développement envoie un message OSC UDP `/newVisitor` avec la
+valeur entière `1` à chaque activation du mode Minimaliste, vers **PC 2 : `192.168.50.2:9000`**.
+Le récepteur VIDEO OUT n'a pas besoin d'être ouvert. Le bouton **Test OSC**
+envoie uniquement ce signal. Une détection visiteur seule ne l'envoie pas :
+l'activation de Minimaliste au démarrage de la génération le déclenche.
+À la fin réussie du rendu ComfyUI, `/generationDone 1` est envoyé à la même destination.
+
+Un nouveau visiteur remplace les demandes ComfyUI précédentes de l'application :
+les prompts en attente sont supprimés et le prompt en cours est interrompu par son
+identifiant. La nouvelle génération attend la confirmation de cet arrêt. Les
+anciens rendus ne déclenchent plus `/generationDone`. Les tâches d'autres
+applications ne sont pas supprimées. Le suivi des identifiants dure pendant la
+session du serveur ; les tâches lancées avant son redémarrage ne sont pas suivies.
+
+Sur PC 2, créer un
+**OSC In CHOP** dans TouchDesigner : **Network Port = 9000**, **Active = On**,
+**Pulse Mode = On** pour obtenir une impulsion par visiteur. Autoriser UDP 9000
+dans le pare-feu de PC 2 si nécessaire.
+
+Pour une destination fixe sans récepteur ouvert, définir `TD_OSC_HOST` (IP de
+PC 2) et éventuellement `TD_OSC_PORT` avant de lancer `npm run dev`.
+L'envoi UDP ne confirme pas la réception par TouchDesigner.
+
 ### 2. Second Ordinateur Récepteur (`receiver.html`)
 - Sur un second ordinateur connecté au même réseau Wi-Fi/LAN, ouvrez :
   ```
@@ -211,3 +236,15 @@ Pour explorer les animations disponibles, leurs métadonnées et le schéma de d
 - **Institution** : ECAL (École cantonale d'art de Lausanne)
 - **Auteur** : Jamy Herrmann
 - **Technologies** : Three.js, MediaPipe Vision Tasks, Kokoro TTS ONNX, WebRTC, Vite.
+
+
+### Sortie vid?o propre dans OBS ? NDI ? TouchDesigner
+
+1. Garder l?application ouverte sur l?ordinateur 1, avec le serveur de d?veloppement actif.
+2. Sur ce m?me ordinateur, ajouter une source **Navigateur** dans OBS avec l?URL `http://127.0.0.1:5173/receiver.html?output=obs` (adapter le port ? celui de l?application).
+3. R?gler la source sur **1080 ? 1080**, ? **30 FPS**. D?sactiver la fermeture de la source lorsqu?elle n?est pas visible pour garder la connexion active.
+4. La source contient uniquement la vid?o : aucun contr?le, message d?attente ou indicateur de connexion. Sans flux, elle reste noire. Aucune deuxi?me fen?tre de navigateur n?est n?cessaire. La source est muette.
+5. Installer et configurer **DistroAV** et ses pr?requis NDI pour OBS. Activer sa sortie NDI ; la sortie principale transmet la sc?ne OBS, ? composer uniquement avec cette source si l?on veut la vid?o seule.
+6. Sur l?ordinateur 2, dans TouchDesigner, cr?er un **NDI In TOP**, puis s?lectionner la source OBS dans **Source Name**. Utiliser de pr?f?rence Ethernet.
+
+Le transport entre l?application et la source Navigateur OBS reste WebRTC en local. L??mission NDI est faite par OBS/DistroAV ; l?application n??met pas directement de NDI. OBS, DistroAV et la r?ception TouchDesigner n?cessitent une v?rification sur les machines concern?es.

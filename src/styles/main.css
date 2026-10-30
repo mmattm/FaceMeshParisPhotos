@@ -62,9 +62,21 @@ body {
   display: none !important;
 }
 
+/* M toggles the operator interface without changing the captured video. */
+body.interface-hidden #app > :not(.stage-container),
+body.interface-hidden .stage-container > :not(.video-wrapper) {
+  display: none !important;
+}
+
+body.interface-hidden .stage-container {
+  position: absolute;
+  inset: 0;
+}
+
 /* Stage Area (Video & Canvas) */
 .stage-container {
   position: relative;
+  container-type: size;
   flex: 1;
   width: 100%;
   height: 100%;
@@ -77,8 +89,11 @@ body {
 
 .video-wrapper {
   position: relative;
-  width: 100%;
-  height: 100%;
+  /* Match the centered square crop sent to OBS at every window size. */
+  width: min(100cqw, 100cqh);
+  height: min(100cqw, 100cqh);
+  flex-shrink: 0;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -88,7 +103,8 @@ body {
 
 #webcam-video {
   position: absolute;
-  width: 100%;
+  /* Keep the same 16:9 composition as the renderer before square cropping. */
+  width: 177.7777778%;
   height: 100%;
   object-fit: cover;
   opacity: 0;
@@ -130,7 +146,7 @@ body {
 
 #output-canvas {
   position: absolute;
-  width: 100%;
+  width: 177.7777778%;
   height: 100%;
   object-fit: cover;
   pointer-events: none;
@@ -526,7 +542,47 @@ body {
 .motion-preset-recorder {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
+}
+
+.anim-library-card .motion-preset-recorder {
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+}
+
+.osc-dropdown {
+  position: relative;
+}
+
+.osc-dropdown > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.osc-dropdown > summary::-webkit-details-marker {
+  display: none;
+}
+
+.osc-dropdown > summary::after {
+  content: ' ▾';
+}
+
+.osc-dropdown-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 190px;
+  padding: 8px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-elevated);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
 }
 
 .simple-settings-row {
@@ -535,8 +591,17 @@ body {
   flex-wrap: wrap;
   gap: 12px;
   justify-content: flex-end;
-  padding-top: 9px;
-  border-top: 1px solid var(--border-light);
+}
+
+.visitor-test-row {
+  flex-basis: 100%;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.visitor-test-row .debug-visitor-btn {
+  padding: 4px 8px;
+  font-size: 11px;
 }
 
 .motion-preset-name {

@@ -16,6 +16,7 @@ export class PresetAudioLipSync {
     this.delayNode = null;
     this.startedAt = 0;
     this.jaw = 0;
+    this.jawTarget = 0;
     this.peak = 0.06;
     this.rounded = 0;
     this.spread = 0;
@@ -39,7 +40,7 @@ export class PresetAudioLipSync {
       this.output = output;
       this.analyser = context.createAnalyser();
       this.analyser.fftSize = 512;
-      this.analyser.smoothingTimeConstant = 0.35;
+      this.analyser.smoothingTimeConstant = 0.15;
       this.destination = context.createMediaStreamDestination();
       this.playbackGain = context.createGain();
       this.playbackGain.gain.setValueAtTime(0, context.currentTime);
@@ -78,7 +79,7 @@ export class PresetAudioLipSync {
 
   setAudioDelayMs(value) {
     if (!Number.isFinite(value)) return;
-    this.audioDelayMs = Math.max(0, Math.min(2000, value));
+    this.audioDelayMs = Math.max(0, Math.min(3000, value));
     if (this.delayNode) {
       const parameter = this.delayNode.delayTime;
       parameter.cancelScheduledValues(this.context.currentTime);
@@ -101,7 +102,7 @@ export class PresetAudioLipSync {
     const source = this.context.createBufferSource();
     source.buffer = this.buffer;
     // Analyse the original signal for lipsync, and delay only the audible output.
-    this.delayNode = this.context.createDelay(2.1);
+    this.delayNode = this.context.createDelay(3.1);
     this.delayNode.delayTime.setValueAtTime(this.audioDelayMs / 1000, this.context.currentTime);
     this.analyser.connect(this.delayNode);
     this.delayNode.connect(this.playbackGain);
@@ -134,6 +135,7 @@ export class PresetAudioLipSync {
     }
     this.durationMs = 0;
     this.jaw = 0;
+    this.jawTarget = 0;
     this.peak = 0.06;
     this.rounded = 0;
     this.spread = 0;
@@ -148,6 +150,7 @@ export class PresetAudioLipSync {
     // Release the mouth to the preset as soon as the track is no longer playing.
     if (!this.durationMs || !this.source || this.context.state !== 'running' || this.elapsedMs >= this.durationMs) {
       this.jaw = 0;
+      this.jawTarget = 0;
       this.rounded = 0;
       this.spread = 0;
       this.lastAnalysisTime = null;
@@ -165,7 +168,10 @@ export class PresetAudioLipSync {
       this.analyser.getByteFrequencyData(this.spectrum);
       const rms = Math.sqrt(this.wave.reduce((sum, value) => sum + value * value, 0) / this.wave.length);
       this.peak = Math.max(0.06, this.peak * Math.exp(-dt), rms);
-      target = Math.min(0.62, Math.max(0, (rms - 0.008) / this.peak) * 0.62);
+      // Emphasize speech while keeping the mouth closed during silence.
+      const energy = Math.max(0, Math.min(1, (rms - 0.008) / this.peak));
+      const activation = Math.max(0, (energy - 0.14) / 0.86);
+      target = activation * activation * (3 - 2 * activation) * 0.45;
       const band = (from, to) => {
         const hzPerBin = this.context.sampleRate / this.analyser.fftSize;
         const first = Math.max(0, Math.floor(from / hzPerBin));
@@ -179,22 +185,28 @@ export class PresetAudioLipSync {
       rounded = Math.max(0, Math.min(1, (vowelBalance - 0.25) * 1.5));
       spread = 1 - rounded;
     }
-    // Fast speech onset, softer release, and continuous vowel-shape transitions.
-    this.jaw += (target - this.jaw) * (1 - Math.exp(-dt / (target > this.jaw ? 0.024 : 0.055)));
-    this.rounded += (rounded - this.rounded) * (1 - Math.exp(-dt / 0.06));
-    this.spread += (spread - this.spread) * (1 - Math.exp(-dt / 0.06));
-    const upperLift = this.jaw * (0.45 + this.spread * 0.25);
+    // Short attack and release preserve syllables without abrupt lip motion.
+    this.jawTarget += (target - this.jawTarget) * (1 - Math.exp(-dt / 0.010));
+    const jawResponse = this.jawTarget > this.jaw ? 0.015 : 0.022;
+    this.jaw += (this.jawTarget - this.jaw) * (1 - Math.exp(-dt / jawResponse));
+    if (target === 0 && this.jaw < 0.0005) this.jaw = this.jawTarget = 0;
+    this.rounded += (rounded - this.rounded) * (1 - Math.exp(-dt / 0.035));
+    this.spread += (spread - this.spread) * (1 - Math.exp(-dt / 0.035));
+    const opening = Math.min(1, this.jaw / 0.06);
+    const openingEase = opening * opening * (3 - 2 * opening);
+    const upperLift = this.jaw * (0.20 + this.spread * 0.10);
     return {
       _audioArticulation: 1,
       jawOpen: this.jaw,
+      mouthClose: 1 - openingEase * 0.85,
       mouthUpperUpLeft: upperLift,
       mouthUpperUpRight: upperLift,
-      mouthLowerDownLeft: this.jaw * 0.4,
-      mouthLowerDownRight: this.jaw * 0.4,
-      mouthStretchLeft: this.jaw * this.spread * 0.45,
-      mouthStretchRight: this.jaw * this.spread * 0.45,
-      mouthFunnel: this.jaw * this.rounded * 0.65,
-      mouthPucker: this.jaw * this.rounded * 0.35
+      mouthLowerDownLeft: this.jaw * 0.25,
+      mouthLowerDownRight: this.jaw * 0.25,
+      mouthStretchLeft: this.jaw * this.spread * 0.55,
+      mouthStretchRight: this.jaw * this.spread * 0.55,
+      mouthFunnel: this.jaw * this.rounded * 0.25,
+      mouthPucker: this.jaw * this.rounded * 0.55
     };
   }
 }
