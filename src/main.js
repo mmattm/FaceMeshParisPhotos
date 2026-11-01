@@ -8,19 +8,15 @@
 import { CameraManager } from './core/camera.js';
 import { FaceTracker } from './core/tracker.js';
 import { FaceMeshRenderer } from './core/renderer.js';
-import { ExpressionLooper } from './mocap/expressionLooper.js';
-import { AutoCalibrator } from './mocap/autoCalibrator.js';
 import { AutonomousGazeEngine } from './core/autonomousGazeEngine.js';
 import { FaceTextureHistoryBuffer } from './core/faceTextureHistoryBuffer.js';
 import { AnimationLibrary } from './core/animationLibrary.js';
 import { VisitorDetector } from './core/visitorDetector.js';
-import { isFaceInsideOutput, getDepartureBlend } from './core/outputFaceBounds.js';
 import { createFallbackFaceLandmarks } from './core/fallbackFace.js';
 import { CanvasBroadcaster } from './webrtc/canvasBroadcaster.js';
 import { MotionPresetRecorder } from './mocap/motionPresetRecorder.js';
-import { setupFaceMeshAlignmentControls } from './ui/faceMeshAlignmentControls.js';
-import { CameraAlignmentProfiles, ALIGNMENT_PROFILE_LABELS } from './ui/cameraAlignmentProfiles.js';
 import { AudioLibraryControls } from './ui/audioLibraryControls.js';
+import { bindSettingsWindow } from './ui/settingsWindow.js';
 
 class App {
   constructor() {
@@ -31,12 +27,9 @@ class App {
 
     // Modules
     this.camera = new CameraManager(this.videoEl);
-    this.tracker = new FaceTracker({ smoothing: true });
+    this.tracker = new FaceTracker({ smoothing: false });
     this.renderer = new FaceMeshRenderer(this.canvasEl, this.videoEl);
-    this.looper = new ExpressionLooper();
-    this.autoCalibrator = new AutoCalibrator(this.looper);
     this.autonomousEngine = new AutonomousGazeEngine();
-    this.departureEngine = new AutonomousGazeEngine();
     this.fallbackFaceLandmarks = createFallbackFaceLandmarks();
     // Start in automatic mode: prefer a captured visitor, otherwise use fallback.
     this.useVisitorPortrait = true;
@@ -64,8 +57,6 @@ class App {
     this.canvasBroadcaster.mountPreview(document.getElementById('webrtc-preview-slot'));
     this.presetRecorder = new MotionPresetRecorder({ fps: 30, maxDurationMs: 30000 });
     this.isSavingPresetRecording = false;
-    this.bustModeEnabled = true;
-    this.bustModeRequested = true;
     this.minimalistMode = false;
     this.notificationEntries = new Map();
     this.currentVisitorId = null;
@@ -95,12 +86,6 @@ class App {
     this.lastTrackingHeadPose = null;
     this.lastRenderedTrackingResult = null;
 
-    // Bidirectional Smooth State Handoff (Autonomous <-> Live)
-    this.isBlendingToLive = false;
-    this.blendToLiveStartTime = 0;
-    this.blendToLiveDuration = 450;
-    this.autoExitLandmarks = null;
-
     // Offscreen fallback buffer canvas
     this.lastFaceCanvas = document.createElement('canvas');
     this.lastFaceCtx = this.lastFaceCanvas.getContext('2d');
@@ -111,9 +96,9 @@ class App {
     this.currentFps = 60;
     this.rafId = null;
 
-    // Webcam feeds tracking and textures; the displayed composition is the bust.
+    // Webcam and Face Cap share the same fixed perspective camera.
     this.isMirrored = true;
-    this.showWebcam = false;
+    this.showWebcam = true;
 
     this.autonomousEngine.setMirrored(this.isMirrored);
     this.renderer.setMirrored(true);
@@ -124,6 +109,9 @@ class App {
   async init() {
     try {
       this.setupEventListeners();
+
+      if (this.loadingText) this.loadingText.textContent = 'Chargement du modèle Face Cap…';
+      await this.renderer.init();
 
       // 1. Initialize Face Tracker AI
       await this.tracker.init((status) => {
@@ -157,7 +145,7 @@ class App {
         await this.camera.start(null, { width: 1280, height: 720 });
       } catch (camErr) {
         console.warn('Camera failed to start:', camErr);
-        this.showNotification('Webcam indisponible : buste autonome avec visage de secours.', '', 6000, 'camera');
+        this.showNotification('Webcam indisponible : visage Face Cap autonome de secours.', '', 6000, 'camera');
       }
 
       // 3. Initialize the fixed Full HD render surface once. Its CSS display
@@ -175,10 +163,7 @@ class App {
     } catch (err) {
       console.error('Initialization failed:', err);
       if (this.loadingText) {
-        this.loadingText.innerHTML = `
-          <div>Error: ${err.message || 'Initialization failed'}</div>
-          <button class="tool-btn" style="padding: 6px 12px; margin-top: 10px;" onclick="window.location.reload()">↺ Retry</button>
-        `;
+        this.loadingText.textContent = `Erreur : ${err.message || 'Initialisation impossible'}. Rechargez la page pour réessayer.`;
       }
     }
   }
@@ -215,9 +200,9 @@ class App {
         button.disabled = false;
       }
     }));
-    // Webcam remains a tracking and texture source, never a background.
-    this.showWebcam = false;
-    document.body.classList.remove('show-webcam');
+    // The webcam background uses the same mirrored scene as the face.
+    this.showWebcam = true;
+    document.body.classList.add('show-webcam');
     document.body.classList.add('show-texture');
 
     document.getElementById('btn-copy-visitor-id')?.addEventListener('click', async () => {
@@ -266,15 +251,7 @@ class App {
           btnAutonomous.classList.remove('active');
         }
       } else {
-        if (this.appState === 'AUTONOMOUS') {
-          this.isBlendingToLive = true;
-          this.blendToLiveStartTime = performance.now();
-          this.blendToLiveDuration = 600;
-          this.autoExitLandmarks = this.autonomousEngine.lastAutonomousLandmarks
-            ? this.autonomousEngine.lastAutonomousLandmarks.map(p => ({ x: p.x, y: p.y, z: p.z || 0 }))
-            : null;
-          this.autonomousEngine.stopAutonomous();
-        }
+        if (this.appState === 'AUTONOMOUS') this.autonomousEngine.stopAutonomous();
         if (this.renderer.isTextureFrozen) {
           this.restoreLiveFaceTexture();
         }
@@ -282,10 +259,140 @@ class App {
       }
     });
 
-    // Keep the bust composition in live and autonomous states.
-    this.renderer.setBustModel('male_facemesh_zone_creusee');
-    this.renderer.setShowWebcam(false);
-    this.setBustMode();
+    const positionStorageKey = 'photomaton_face_position_mode';
+    try { this.renderer.setPositionMode(localStorage.getItem(positionStorageKey)); } catch { /* Keep tracking if storage is unavailable. */ }
+    const positionButtons = document.querySelectorAll('[data-position-mode]');
+    const syncPositionButtons = () => {
+      positionButtons.forEach(button => {
+        const active = button.dataset.positionMode === this.renderer.positionMode;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-pressed', String(active));
+      });
+      const webcamButton = document.getElementById('btn-toggle-webcam');
+      if (webcamButton) {
+        const tracking = this.renderer.positionMode === 'tracking';
+        webcamButton.disabled = !tracking;
+        webcamButton.classList.toggle('active', tracking && this.showWebcam);
+        webcamButton.setAttribute('aria-pressed', String(tracking && this.showWebcam));
+        webcamButton.title = tracking ? 'Afficher la webcam derrière le visage en mode Live' : 'Webcam masquée en mode Locked';
+      }
+    };
+    syncPositionButtons();
+    positionButtons.forEach(button => button.addEventListener('click', () => {
+      this.renderer.setPositionMode(button.dataset.positionMode);
+      syncPositionButtons();
+      try { localStorage.setItem(positionStorageKey, this.renderer.positionMode); } catch { /* Keep the session's selection. */ }
+      if (this.lastRenderedTrackingResult?.detected) this.renderer.render(this.lastRenderedTrackingResult);
+    }));
+
+    this.renderer.setShowWebcam(this.showWebcam);
+    document.getElementById('btn-toggle-webcam')?.addEventListener('click', event => {
+      this.showWebcam = !this.showWebcam;
+      this.renderer.setShowWebcam(this.showWebcam);
+      syncPositionButtons();
+    });
+    document.getElementById('btn-toggle-expressions')?.addEventListener('click', () => {
+      this.renderer.toggleExpressionControls();
+    });
+    const intensityStorageKey = 'photomaton_expression_intensity';
+    const intensitySlider = document.getElementById('expression-intensity');
+    const intensityOutput = document.getElementById('expression-intensity-value');
+    const syncExpressionIntensity = value => {
+      this.renderer.setExpressionIntensity(value);
+      const percent = Math.round(this.renderer.expressionIntensity * 100);
+      if (intensitySlider) {
+        intensitySlider.value = String(this.renderer.expressionIntensity);
+        intensitySlider.setAttribute('aria-valuetext', `${percent} %`);
+      }
+      if (intensityOutput) intensityOutput.value = `${percent} %`;
+    };
+    try {
+      const savedIntensity = localStorage.getItem(intensityStorageKey);
+      syncExpressionIntensity(savedIntensity === null ? 1 : Number(savedIntensity));
+    } catch { syncExpressionIntensity(1); }
+    const changeExpressionIntensity = value => {
+      syncExpressionIntensity(value);
+      try { localStorage.setItem(intensityStorageKey, String(this.renderer.expressionIntensity)); } catch { /* Keep the session's setting. */ }
+      if (this.lastRenderedTrackingResult?.detected) this.renderer.render(this.lastRenderedTrackingResult);
+    };
+    intensitySlider?.addEventListener('input', event => changeExpressionIntensity(Number(event.currentTarget.value)));
+    document.getElementById('btn-reset-expression-intensity')?.addEventListener('click', () => changeExpressionIntensity(1));
+
+    const zoomStorageKey = 'photomaton_face_zoom';
+    const zoomSlider = document.getElementById('face-zoom');
+    const zoomOutput = document.getElementById('face-zoom-value');
+    const syncFaceZoom = value => {
+      this.renderer.setFaceZoom(value);
+      const percent = Math.round(this.renderer.faceZoom * 100);
+      zoomSlider.value = String(this.renderer.faceZoom);
+      zoomSlider.setAttribute('aria-valuetext', `${percent} %`);
+      zoomOutput.value = `${percent} %`;
+    };
+    try {
+      const savedZoom = localStorage.getItem(zoomStorageKey);
+      syncFaceZoom(savedZoom === null ? 1 : Number(savedZoom));
+    } catch { syncFaceZoom(1); }
+    const changeFaceZoom = value => {
+      syncFaceZoom(value);
+      try { localStorage.setItem(zoomStorageKey, String(this.renderer.faceZoom)); } catch { /* Keep the session's zoom. */ }
+      if (this.lastRenderedTrackingResult?.detected) this.renderer.render(this.lastRenderedTrackingResult);
+    };
+    zoomSlider.addEventListener('input', event => changeFaceZoom(Number(event.currentTarget.value)));
+    document.getElementById('btn-reset-face-zoom').addEventListener('click', () => changeFaceZoom(1));
+
+    const rotationStorageKey = 'photomaton_max_face_rotation_degrees';
+    const rotationSlider = document.getElementById('face-max-rotation');
+    const rotationOutput = document.getElementById('face-max-rotation-value');
+    const syncMaxRotation = value => {
+      this.renderer.setMaxRotationDegrees(value);
+      const degrees = this.renderer.maxRotationDegrees;
+      rotationSlider.value = String(degrees);
+      rotationSlider.setAttribute('aria-valuetext', degrees === 180 ? 'Rotation libre' : `${degrees} degrés maximum`);
+      rotationOutput.value = degrees === 180 ? 'Libre' : `${degrees}°`;
+    };
+    try {
+      const savedRotation = localStorage.getItem(rotationStorageKey);
+      syncMaxRotation(savedRotation === null ? 180 : Number(savedRotation));
+    } catch { syncMaxRotation(180); }
+    const changeMaxRotation = value => {
+      syncMaxRotation(value);
+      try { localStorage.setItem(rotationStorageKey, String(this.renderer.maxRotationDegrees)); } catch { /* Keep the session's limit. */ }
+      if (this.lastRenderedTrackingResult?.detected) this.renderer.render(this.lastRenderedTrackingResult);
+    };
+    rotationSlider.addEventListener('input', event => changeMaxRotation(Number(event.currentTarget.value)));
+    document.getElementById('btn-reset-face-max-rotation').addEventListener('click', () => changeMaxRotation(180));
+
+    // Reuse the earlier key so the saved angle survives its extension to all modes.
+    const facePitchStorageKey = 'photomaton_live_pitch_degrees';
+    const facePitchSlider = document.getElementById('face-pitch');
+    const facePitchOutput = document.getElementById('face-pitch-value');
+    const syncFacePitch = value => {
+      this.renderer.setFacePitchDegrees(value);
+      const degrees = this.renderer.facePitchDegrees;
+      if (facePitchSlider) {
+        facePitchSlider.value = String(degrees);
+        facePitchSlider.setAttribute('aria-valuetext', `${degrees} degrés`);
+      }
+      if (facePitchOutput) facePitchOutput.value = `${degrees > 0 ? '+' : ''}${degrees}°`;
+    };
+    try { syncFacePitch(Number(localStorage.getItem(facePitchStorageKey))); } catch { syncFacePitch(0); }
+    const changeFacePitch = value => {
+      syncFacePitch(value);
+      try { localStorage.setItem(facePitchStorageKey, String(this.renderer.facePitchDegrees)); } catch { /* Keep the session's correction. */ }
+      if (this.lastRenderedTrackingResult?.detected) {
+        this.renderer.render(this.lastRenderedTrackingResult);
+      }
+    };
+    facePitchSlider?.addEventListener('input', event => changeFacePitch(Number(event.currentTarget.value)));
+    document.getElementById('btn-reset-face-pitch')?.addEventListener('click', () => changeFacePitch(0));
+    document.getElementById('btn-toggle-untextured')?.addEventListener('click', event => {
+      const untextured = this.renderer.isFaceTextureEnabled;
+      this.renderer.setFaceTextureEnabled(!untextured);
+      event.currentTarget.classList.toggle('active', untextured);
+      event.currentTarget.setAttribute('aria-pressed', String(untextured));
+      this.syncFaceTextureButton();
+      if (this.lastRenderedTrackingResult?.detected) this.renderer.render(this.lastRenderedTrackingResult);
+    });
 
     document.getElementById('btn-toggle-minimalist')?.addEventListener('click', () => {
       this.setMinimalistMode(!this.minimalistMode);
@@ -302,52 +409,6 @@ class App {
       this.showNotification('Nouveau visiteur simulé', '', 2200, 'visitor-debug');
     });
 
-    // 4. Neutral Baseline Calibration Button & Visual Toast
-    const btnCalibrate = document.getElementById('btn-calibrate') || document.getElementById('btn-calibrate-neutral');
-    const calibStatus = document.getElementById('calib-status');
-    const calibIcon = document.getElementById('calib-icon');
-    const calToast = document.getElementById('calibration-toast');
-    const calText = document.getElementById('cal-text');
-
-    if (btnCalibrate && this.looper?.calibrator) {
-      btnCalibrate.addEventListener('click', () => {
-        this.looper.calibrator.startCalibration();
-      });
-
-      this.looper.calibrator.addEventListener('calibration:start', () => {
-        btnCalibrate.classList.add('calibrating');
-        if (calibStatus) calibStatus.textContent = 'Hold Neutral...';
-        if (calToast) {
-          calToast.classList.remove('hidden');
-          if (calText) calText.textContent = 'Calibrating neutral face... Hold still';
-        }
-      });
-
-      this.looper.calibrator.addEventListener('calibration:progress', (e) => {
-        const pct = Math.round(e.detail.progress * 100);
-        if (calibStatus) calibStatus.textContent = `${pct}%`;
-        if (calText) calText.textContent = `Calibrating neutral face... Hold still (${pct}%)`;
-      });
-
-      this.looper.calibrator.addEventListener('calibration:complete', () => {
-        btnCalibrate.classList.remove('calibrating');
-        btnCalibrate.classList.add('calibrated');
-        if (calibIcon) calibIcon.textContent = '✓';
-        if (calibStatus) calibStatus.textContent = 'Calibrated';
-        if (calToast) {
-          if (calText) calText.textContent = '✓ Neutral face calibrated';
-          setTimeout(() => {
-            calToast.classList.add('hidden');
-          }, 1800);
-        }
-        setTimeout(() => {
-          if (calibIcon) calibIcon.textContent = '🎯';
-          if (calibStatus) calibStatus.textContent = 'Calibrate';
-          btnCalibrate.classList.remove('calibrated');
-        }, 2500);
-      });
-    }
-
     // 5. Fullscreen Button
     const btnFullscreen = document.getElementById('btn-fullscreen');
     if (btnFullscreen) {
@@ -362,19 +423,6 @@ class App {
       });
       document.addEventListener('fullscreenchange', () => {
         btnFullscreen.textContent = document.fullscreenElement ? '✕' : '⛶';
-      });
-    }
-
-    // 5b. Head Movement & Tracker Smoothing (Enabled by default)
-    this.looper.setHeadSmoothing(true);
-    this.tracker.setSmoothing(true);
-    const btnSmoothing = document.getElementById('btn-toggle-smoothing');
-    if (btnSmoothing) {
-      btnSmoothing.addEventListener('click', () => {
-        const newState = !this.looper.useHeadSmoothing;
-        this.looper.setHeadSmoothing(newState);
-        this.tracker.setSmoothing(newState);
-        btnSmoothing.classList.toggle('active', newState);
       });
     }
 
@@ -395,15 +443,12 @@ class App {
       });
     }
 
-    // 7. 3D Camera Alignment & Offset Controls
-    this.setupAlignControls();
-    this.faceMeshAlignmentControls = setupFaceMeshAlignmentControls(this.renderer);
+    // 7. Expression and audio controls
     this.setupPresetAudioControls();
-    this.setupPresetExpressionControls();
     this.audioLibrary = new AudioLibraryControls(this);
     this.audioLibrary.bind();
 
-    // 8. Dedicated Animation Library & 50% Random Autonomous Playback Controls
+    // 8. Manual animation library and autonomous playback
     this.setupAnimationLibraryControls();
 
     // 9. Motion-only preset recorder (no microphone and no audio payload)
@@ -411,6 +456,7 @@ class App {
 
     // 10. Optional ComfyUI workflow execution on new visitor
     this.setupComfyUiControls();
+    this.settingsWindow = bindSettingsWindow();
     this.updateAutonomousAvailability(true);
 
     // Keyboard Shortcuts
@@ -421,34 +467,11 @@ class App {
       if (e.key.toLowerCase() === 'm') {
         if (e.repeat) return;
         e.preventDefault();
+        this.settingsWindow?.close();
         document.body.classList.toggle('interface-hidden');
-      } else if (e.key.toLowerCase() === 'o') {
-        document.getElementById('btn-toggle-align')?.click();
       } else if (e.key.toLowerCase() === 'a') {
         btnAutonomous?.click();
       }
-    });
-  }
-
-  setupPresetExpressionControls() {
-    const slider = document.getElementById('slider-expression-intensity');
-    const value = document.getElementById('expression-intensity-value');
-    if (!slider || !value) return;
-    const storageKey = 'photomaton_preset_expression_intensity';
-    try {
-      const saved = localStorage.getItem(storageKey);
-      if (saved !== null) this.autonomousEngine.setPresetExpressionIntensity(Number(saved) / 100);
-    } catch { /* Keep the default intensity. */ }
-    const refresh = () => {
-      const percent = Math.round(this.autonomousEngine.presetExpressionIntensity * 100);
-      slider.value = percent;
-      value.textContent = `${percent}%`;
-    };
-    refresh();
-    slider.addEventListener('input', () => {
-      this.autonomousEngine.setPresetExpressionIntensity(Number(slider.value) / 100);
-      refresh();
-      try { localStorage.setItem(storageKey, slider.value); } catch { /* Session-only adjustment. */ }
     });
   }
 
@@ -490,275 +513,6 @@ class App {
     });
   }
 
-  /**
-   * 3D Camera Alignment / Offset Mode Setup
-   */
-  setupAlignControls() {
-    const btnToggleAlign = document.getElementById('btn-toggle-align');
-    const alignPanel = document.getElementById('align-panel');
-    const btnCloseAlign = document.getElementById('btn-close-align');
-    const alignOverlay = document.getElementById('align-overlay');
-    const alignCrosshair = document.getElementById('align-crosshair');
-    const checkAlignGrid = document.getElementById('check-align-grid');
-    const btnResetCamAll = document.getElementById('btn-reset-cam-all');
-    const btnSaveCam = document.getElementById('btn-save-cam');
-    const saveStatus = document.getElementById('align-save-status');
-
-    const sliderCamX = document.getElementById('slider-cam-x');
-    const valCamX = document.getElementById('val-cam-x');
-    const sliderCamY = document.getElementById('slider-cam-y');
-    const valCamY = document.getElementById('val-cam-y');
-
-    const sliderCamPitch = document.getElementById('slider-cam-pitch');
-    const valCamPitch = document.getElementById('val-cam-pitch');
-    const sliderCamYaw = document.getElementById('slider-cam-yaw');
-    const valCamYaw = document.getElementById('val-cam-yaw');
-    const sliderCamRoll = document.getElementById('slider-cam-roll');
-    const valCamRoll = document.getElementById('val-cam-roll');
-
-    const sliderCamZoom = document.getElementById('slider-cam-zoom');
-    const valCamZoom = document.getElementById('val-cam-zoom');
-
-    const resetButtons = document.querySelectorAll('.align-btn-reset');
-
-    this.isAlignModeActive = false;
-
-    const offset = { x: 0, y: 0, pitch: 0, yaw: 0, roll: 0, zoom: 1.0 };
-    const profiles = new CameraAlignmentProfiles(this.renderer, localStorage);
-
-    const updateSaveStatus = () => {
-      const current = this.renderer.getCameraOffset();
-      const savedOffset = profiles.saved;
-      const unchanged = savedOffset && Object.keys(offset).every(key => Math.abs(current[key] - savedOffset[key]) < 0.000001);
-      if (saveStatus) saveStatus.textContent = unchanged ? 'Réglage enregistré' : 'Cliquez sur Save pour mémoriser';
-    };
-
-    btnSaveCam?.addEventListener('click', () => {
-      try {
-        profiles.save();
-        updateSaveStatus();
-        this.showNotification(`Align 3D · ${ALIGNMENT_PROFILE_LABELS[profiles.active]} enregistré`, 'success', 2500, 'camera-alignment');
-      } catch {
-        if (saveStatus) saveStatus.textContent = 'Enregistrement indisponible sur ce navigateur';
-        this.showNotification('Impossible de mémoriser l’alignement 3D', 'error', 3500, 'camera-alignment');
-      }
-    });
-
-    const updateUIFromState = () => {
-      const cur = this.renderer.getCameraOffset();
-      if (sliderCamX) sliderCamX.value = cur.x;
-      if (valCamX) valCamX.textContent = `${Math.round(cur.x)}px`;
-
-      if (sliderCamY) sliderCamY.value = cur.y;
-      if (valCamY) valCamY.textContent = `${Math.round(cur.y)}px`;
-
-      if (sliderCamPitch) sliderCamPitch.value = cur.pitch;
-      if (valCamPitch) valCamPitch.textContent = `${cur.pitch.toFixed(1)}°`;
-
-      if (sliderCamYaw) sliderCamYaw.value = cur.yaw;
-      if (valCamYaw) valCamYaw.textContent = `${cur.yaw.toFixed(1)}°`;
-
-      if (sliderCamRoll) sliderCamRoll.value = cur.roll;
-      if (valCamRoll) valCamRoll.textContent = `${cur.roll.toFixed(1)}°`;
-
-      if (sliderCamZoom) sliderCamZoom.value = Math.round(cur.zoom * 100);
-      if (valCamZoom) valCamZoom.textContent = `${Math.round(cur.zoom * 100)}%`;
-      updateSaveStatus();
-    };
-
-    this.syncAlignProfile = () => {
-      const mode = this.minimalistMode ? 'minimalist'
-        : (this.bustModeEnabled || this.appState === 'AUTONOMOUS' ? 'autonomous_bust' : 'live');
-      profiles.activate(mode);
-      const label = document.getElementById('align-profile-label');
-      if (label) label.textContent = `Profil : ${ALIGNMENT_PROFILE_LABELS[mode]}`;
-      if (btnSaveCam) btnSaveCam.title = `Enregistrer Align 3D pour ${ALIGNMENT_PROFILE_LABELS[mode]}`;
-      updateUIFromState();
-    };
-    this.syncAlignProfile();
-
-    // Toggle Align Mode
-    const setAlignMode = (active) => {
-      this.isAlignModeActive = active;
-      if (btnToggleAlign) btnToggleAlign.classList.toggle('active', active);
-      if (alignPanel) alignPanel.classList.toggle('hidden', !active);
-      if (alignOverlay) alignOverlay.classList.toggle('hidden', !active);
-    };
-
-    if (btnToggleAlign) {
-      btnToggleAlign.addEventListener('click', () => {
-        setAlignMode(!this.isAlignModeActive);
-      });
-    }
-
-    if (btnCloseAlign) {
-      btnCloseAlign.addEventListener('click', () => {
-        setAlignMode(false);
-      });
-    }
-
-    // Sliders
-    if (sliderCamX) {
-      sliderCamX.addEventListener('input', (e) => {
-        const val = parseFloat(e.target.value);
-        this.renderer.setCameraOffset({ x: val });
-        if (valCamX) valCamX.textContent = `${Math.round(val)}px`;
-        updateSaveStatus();
-      });
-    }
-
-    if (sliderCamY) {
-      sliderCamY.addEventListener('input', (e) => {
-        const val = parseFloat(e.target.value);
-        this.renderer.setCameraOffset({ y: val });
-        if (valCamY) valCamY.textContent = `${Math.round(val)}px`;
-        updateSaveStatus();
-      });
-    }
-
-    if (sliderCamPitch) {
-      sliderCamPitch.addEventListener('input', (e) => {
-        const val = parseFloat(e.target.value);
-        this.renderer.setCameraOffset({ pitch: val });
-        if (valCamPitch) valCamPitch.textContent = `${val.toFixed(1)}°`;
-        updateSaveStatus();
-      });
-    }
-
-    if (sliderCamYaw) {
-      sliderCamYaw.addEventListener('input', (e) => {
-        const val = parseFloat(e.target.value);
-        this.renderer.setCameraOffset({ yaw: val });
-        if (valCamYaw) valCamYaw.textContent = `${val.toFixed(1)}°`;
-        updateSaveStatus();
-      });
-    }
-
-    if (sliderCamRoll) {
-      sliderCamRoll.addEventListener('input', (e) => {
-        const val = parseFloat(e.target.value);
-        this.renderer.setCameraOffset({ roll: val });
-        if (valCamRoll) valCamRoll.textContent = `${val.toFixed(1)}°`;
-        updateSaveStatus();
-      });
-    }
-
-    if (sliderCamZoom) {
-      sliderCamZoom.addEventListener('input', (e) => {
-        const pct = parseFloat(e.target.value);
-        const z = pct / 100.0;
-        this.renderer.setCameraOffset({ zoom: z });
-        if (valCamZoom) valCamZoom.textContent = `${Math.round(pct)}%`;
-        updateSaveStatus();
-      });
-    }
-
-    // Mini Reset Buttons
-    resetButtons.forEach(btn => {
-      btn.addEventListener('click', () => {
-        const axis = btn.dataset.axis;
-        const cur = this.renderer.getCameraOffset();
-        if (axis === 'x') cur.x = 0;
-        else if (axis === 'y') cur.y = 0;
-        else if (axis === 'pitch') cur.pitch = 0;
-        else if (axis === 'yaw') cur.yaw = 0;
-        else if (axis === 'roll') cur.roll = 0;
-        else if (axis === 'zoom') cur.zoom = 1.0;
-        this.renderer.setCameraOffset(cur);
-        updateUIFromState();
-        updateSaveStatus();
-      });
-    });
-
-    // Reset All
-    if (btnResetCamAll) {
-      btnResetCamAll.addEventListener('click', () => {
-        this.renderer.resetCameraOffset();
-        updateUIFromState();
-      });
-    }
-
-    // Crosshair Guide Checkbox
-    if (checkAlignGrid && alignCrosshair) {
-      checkAlignGrid.addEventListener('change', (e) => {
-        alignCrosshair.classList.toggle('hidden', !e.target.checked);
-      });
-    }
-
-    // Interactive Dragging on the Stage Overlay
-    if (alignOverlay) {
-      let isDragging = false;
-      let startX = 0;
-      let startY = 0;
-      let isPanMode = false;
-      let initialOffset = { x: 0, y: 0, pitch: 0, yaw: 0 };
-
-      alignOverlay.addEventListener('mousedown', (e) => {
-        e.preventDefault();
-        isDragging = true;
-        startX = e.clientX;
-        startY = e.clientY;
-        // Shift key or Right click (button 2) triggers 2D displacement (Pan X / Y)
-        isPanMode = e.shiftKey || (e.button === 2);
-        initialOffset = this.renderer.getCameraOffset();
-        alignOverlay.classList.add('dragging');
-      });
-
-      alignOverlay.addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-      });
-
-      window.addEventListener('mousemove', (e) => {
-        if (!isDragging || !this.isAlignModeActive) return;
-
-        const deltaX = e.clientX - startX;
-        const deltaY = e.clientY - startY;
-        const pan = isPanMode || e.shiftKey;
-
-        if (pan) {
-          // Pan: displacement X & Y
-          const sens = 1.0;
-          const newX = Math.round(initialOffset.x + deltaX * sens);
-          const newY = Math.round(initialOffset.y - deltaY * sens);
-          this.renderer.setCameraOffset({
-            x: Math.max(-300, Math.min(300, newX)),
-            y: Math.max(-300, Math.min(300, newY))
-          });
-        } else {
-          // Orbit Tilt: pitch (haut/bas) & yaw (gauche/droite)
-          const sens = 0.25;
-          const newYaw = Number((initialOffset.yaw + deltaX * sens).toFixed(1));
-          const newPitch = Number((initialOffset.pitch - deltaY * sens).toFixed(1));
-          this.renderer.setCameraOffset({
-            yaw: Math.max(-45, Math.min(45, newYaw)),
-            pitch: Math.max(-45, Math.min(45, newPitch))
-          });
-        }
-
-        updateUIFromState();
-      });
-
-      window.addEventListener('mouseup', () => {
-        if (isDragging) {
-          isDragging = false;
-          alignOverlay.classList.remove('dragging');
-          updateSaveStatus();
-        }
-      });
-
-      // Mouse wheel to zoom
-      alignOverlay.addEventListener('wheel', (e) => {
-        e.preventDefault();
-        const cur = this.renderer.getCameraOffset();
-        const zoomDelta = e.deltaY > 0 ? -0.05 : 0.05;
-        const newZoom = Math.max(0.5, Math.min(1.8, Number((cur.zoom + zoomDelta).toFixed(2))));
-        this.renderer.setCameraOffset({ zoom: newZoom });
-        updateUIFromState();
-        updateSaveStatus();
-      }, { passive: false });
-    }
-  }
-
   setupAnimationLibraryControls() {
     const btnOpenAnimLibrary = document.getElementById('btn-open-anim-library');
     const animLibraryModal = document.getElementById('anim-library-modal');
@@ -782,7 +536,7 @@ class App {
     if (btnCloseAnimModal2) btnCloseAnimModal2.addEventListener('click', closeLibraryModal);
     if (backdropAnimLibrary) backdropAnimLibrary.addEventListener('click', closeLibraryModal);
 
-    // Toggle 50% random autonomous playback
+    // Enable manual preset playback while autonomous
     if (toggleAutoPlayback) {
       toggleAutoPlayback.checked = this.animLibrary.isAutonomousPlaybackEnabled;
       toggleAutoPlayback.addEventListener('change', (e) => {
@@ -791,7 +545,7 @@ class App {
         const calToast = document.getElementById('calibration-toast');
         const calText = document.getElementById('cal-text');
         if (calToast && calText) {
-          calText.textContent = enabled ? "✓ Lecture aléatoire (50%) activée en mode autonome" : "Lecture aléatoire désactivée en mode autonome";
+          calText.textContent = enabled ? "✓ Lecture des presets manuels activée" : "Lecture des presets désactivée";
           calToast.classList.remove('hidden');
           setTimeout(() => calToast.classList.add('hidden'), 2500);
         }
@@ -1216,7 +970,7 @@ class App {
       return;
     }
     if (!this.presetRecorder.isRecording) {
-      status.textContent = 'Commencez visage neutre · sans audio';
+      status.textContent = 'Expressions + position 3D · sans audio';
       return;
     }
 
@@ -1283,7 +1037,7 @@ class App {
     if (!force && statusKey === this.lastAnimationStatusKey) return;
     this.lastAnimationStatusKey = statusKey;
 
-    const name = animation?.name || (isAutonomous ? 'Regard autonome' : this.appState === 'WAITING' ? 'En attente' : 'Suivi en direct');
+    const name = animation?.name || (isAutonomous ? 'En attente de preset manuel' : this.appState === 'WAITING' ? 'En attente' : 'Suivi en direct');
     const label = document.getElementById('active-animation-label');
     if (label) {
       label.textContent = name;
@@ -1430,20 +1184,8 @@ class App {
         && this.camera.stream?.getVideoTracks().some(track => track.readyState === 'live' && !track.muted);
       const rawTracking = cameraAvailable ? this.tracker.processVideoFrame(this.videoEl, now) : null;
 
-      const isTracked = Boolean(rawTracking?.detected && !this.forceAutonomousMode);
-      const { renderW, renderH } = this.renderer.getVideoMetrics();
-      this.departureBlendWeight = isTracked ? getDepartureBlend(rawTracking.landmarks,
-        renderW, renderH, this.renderer.canvasWidth, this.renderer.canvasHeight,
-        this.canvasBroadcaster?.outputWidth || 1080, this.canvasBroadcaster?.outputHeight || 1080) : 1;
-      // Leave live mode before the face is clipped by the square broadcast crop.
-      // Require more clearance when returning, so boundary jitter cannot toggle modes.
-      const isFacePresent = isTracked && isFaceInsideOutput(
-        rawTracking.landmarks, renderW, renderH,
-        this.renderer.canvasWidth, this.renderer.canvasHeight,
-        this.canvasBroadcaster?.outputWidth || 1080,
-        this.canvasBroadcaster?.outputHeight || 1080,
-        this.appState === 'AUTONOMOUS' ? 0.06 : 0.02
-      );
+      // Live follows MediaPipe anywhere in the webcam frame, like the example.
+      const isFacePresent = Boolean(rawTracking?.detected && !this.forceAutonomousMode);
 
       // Session detection uses webcam presence, independently of the output crop.
       this.visitorDetector.update(rawTracking, now);
@@ -1451,17 +1193,8 @@ class App {
 
       if (isFacePresent) {
         this.consecutiveDetectedFrames++;
-        this.lastFaceDetectedTime = now;
-        if (this.consecutiveDetectedFrames === 1) {
-          this.autoExitLandmarks = this.appState === 'AUTONOMOUS'
-            ? this.lastRenderedTrackingResult?.landmarks?.map(point => ({ ...point })) : null;
-          this.isBlendingToLive = !!this.autoExitLandmarks;
-          this.blendToLiveStartTime = now;
-          if (this.renderer.isTextureFrozen) this.restoreLiveFaceTexture();
-        }
-
-        // Keep the captured portrait through Live and autonomous handoffs.
-        if (!this.isBlendingToLive && this.appState !== 'AUTONOMOUS' && this.renderer.isTextureFrozen) {
+        this.lastFaceDetectedTime = rawTracking.timestamp ?? now;
+        if (this.appState !== 'AUTONOMOUS' && this.renderer.isTextureFrozen) {
           this.restoreLiveFaceTexture();
         }
 
@@ -1508,62 +1241,19 @@ class App {
         // Feed live face orientation to autonomous gaze engine
         this.autonomousEngine.updateLiveFace(rawTracking);
 
-        // Auto-calibrator updates
-        this.autoCalibrator.update(rawTracking, now);
-
         // Capture only fresh MediaPipe motion frames. No audio stream is ever requested.
         if (this.presetRecorder.isRecording) {
           this.presetRecorder.capture(rawTracking, now);
         }
 
-        // Process with ExpressionLooper
-        const ar = (this.videoEl.videoWidth || 1280) / (this.videoEl.videoHeight || 720);
-        const processedResult = this.looper.process(rawTracking, now, ar);
-
-        if (processedResult && processedResult.detected) {
-          let renderResult = processedResult;
-
-          // Smooth quintic S-curve interpolation from Autonomous wandering position to live face
-          if (this.isBlendingToLive && this.autoExitLandmarks) {
-            const elapsed = now - this.blendToLiveStartTime;
-            if (elapsed < this.blendToLiveDuration) {
-              const rawT = Math.max(0, Math.min(1, elapsed / this.blendToLiveDuration));
-              // Quintic smoothstep: zero velocity & zero acceleration at endpoints
-              const t = rawT * rawT * rawT * (rawT * (rawT * 6 - 15) + 10);
-              const invT = 1.0 - t;
-
-              const blendedLandmarks = new Array(processedResult.landmarks.length);
-              for (let i = 0; i < processedResult.landmarks.length; i++) {
-                const livePt = processedResult.landmarks[i];
-                const autoPt = this.autoExitLandmarks[i] || livePt;
-                blendedLandmarks[i] = {
-                  x: autoPt.x * invT + livePt.x * t,
-                  y: autoPt.y * invT + livePt.y * t,
-                  z: (autoPt.z || 0) * invT + (livePt.z || 0) * t,
-                  visibility: livePt.visibility
-                };
-              }
-              renderResult = {
-                ...processedResult,
-                landmarks: blendedLandmarks,
-                poseLandmarks: blendedLandmarks,
-                liveLandmarks: rawTracking.landmarks,
-                blendToLiveWeight: invT // 1.0 at start, 0.0 at end
-              };
-            } else {
-              this.isBlendingToLive = false;
-              this.autoExitLandmarks = null;
-              if (this.renderer.isTextureFrozen) {
-                this.restoreLiveFaceTexture();
-              }
-            }
-          }
-
-          renderResult = this.blendDepartingFace(renderResult, rawTracking, now);
-          renderResult.liveTexturePreferred = !this.preferCapturedTexture;
-          this.lastRenderedTrackingResult = renderResult;
-          this.renderer.render(renderResult);
-        }
+        // Keep the tracking and recorded data raw. The optional expression
+        // intensity is applied only when the renderer updates the model.
+        const renderResult = { ...rawTracking,
+          landmarks: rawTracking.rawLandmarks || rawTracking.landmarks,
+          liveLandmarks: rawTracking.rawLandmarks || rawTracking.landmarks,
+          isAutonomous: false };
+        this.lastRenderedTrackingResult = renderResult;
+        this.renderer.render(renderResult, now);
 
         if (rawTracking.latencyMs && statLatency) {
           statLatency.textContent = `${Math.round(rawTracking.latencyMs)}ms`;
@@ -1573,7 +1263,7 @@ class App {
         && this.appState !== 'AUTONOMOUS' && this.lastRenderedTrackingResult?.detected
         && now - this.lastFaceDetectedTime < 180) {
         // Ignore brief detection dropouts instead of changing texture and mode.
-        this.renderer.render(this.lastRenderedTrackingResult);
+        this.renderer.render(this.lastRenderedTrackingResult, now);
       } else {
         // Face is absent or force autonomous mode is active
         this.consecutiveDetectedFrames = 0;
@@ -1583,16 +1273,13 @@ class App {
           && (this.appState === 'AUTONOMOUS' || this.applyBestTextureReference(now))) {
           if (this.appState !== 'AUTONOMOUS') {
             this.setState('AUTONOMOUS');
-            this.isBlendingToLive = false;
-            this.autoExitLandmarks = null;
 
             // Ease smoothly from the last displayed face to avoid a point-cloud
             // jump on tracking loss. Other views retain the longer handoff.
             this.autonomousEngine.startAutonomous(
               now,
               this.lastRenderedTrackingResult?.landmarks || this.lastTrackingLandmarks,
-              this.lastTrackingHeadPose,
-              this.minimalistMode ? 500 : 850
+              this.lastTrackingHeadPose
             );
           }
 
@@ -1601,7 +1288,7 @@ class App {
           const autoFrame = this.autonomousEngine.generateFrame(now, renderW, renderH);
           if (autoFrame) {
             this.lastRenderedTrackingResult = autoFrame;
-            this.renderer.render(autoFrame);
+            this.renderer.render(autoFrame, now);
 
           }
 
@@ -1644,41 +1331,12 @@ class App {
    * for both the 3D mask and the background plane in autonomous mode.
    */
   restoreLiveFaceTexture() {
-    if ((this.preferCapturedTexture || this.departureBlendWeight > 0)
+    if (this.preferCapturedTexture
       && this.historyBuffer.hasCurrentVisitorSnapshot()) {
       this.applyBestTextureReference(performance.now(), 0);
     } else {
       this.renderer.unfreezeFaceTexture();
     }
-  }
-
-  blendDepartingFace(liveFrame, rawTracking, now) {
-    const weight = this.departureBlendWeight || 0;
-    if (this.minimalistMode || !weight || !this.historyBuffer.hasCurrentVisitorSnapshot()) {
-      if (this.departureEngine.isActive) this.departureEngine.stopAutonomous();
-      return liveFrame;
-    }
-    this.applyBestTextureReference(now, 0);
-    if (!this.departureEngine.isActive) {
-      this.departureEngine.setBaseLandmarks(this.renderer.frozenLandmarks);
-      // This preview engine has no enabled audio and never changes visitor state.
-      this.departureEngine.startAutonomous(now, null, rawTracking.headPose);
-    }
-    const { renderW, renderH } = this.renderer.getVideoMetrics();
-    const autoFrame = this.departureEngine.generateFrame(now, renderW, renderH);
-    if (!autoFrame) return liveFrame;
-    const mixPoints = (live, auto) => live.map((p, i) => {
-      const a = auto?.[i] || p;
-      return { ...p, x: p.x * (1 - weight) + a.x * weight,
-        y: p.y * (1 - weight) + a.y * weight,
-        z: (p.z || 0) * (1 - weight) + (a.z || 0) * weight };
-    });
-    return { ...liveFrame,
-      landmarks: mixPoints(liveFrame.landmarks, autoFrame.landmarks),
-      poseLandmarks: mixPoints(liveFrame.landmarks, autoFrame.poseLandmarks || autoFrame.landmarks),
-      liveLandmarks: rawTracking.landmarks,
-      departureTextureMix: this.preferCapturedTexture ? 1 : weight
-    };
   }
 
   applyBestTextureReference(now = performance.now(), minAgeMs = 1500, refresh = false) {
@@ -1722,8 +1380,6 @@ class App {
       this.forceAutonomousMode = false;
       document.getElementById('btn-toggle-autonomous')?.classList.remove('active');
       if (this.appState === 'AUTONOMOUS') {
-        this.isBlendingToLive = false;
-        this.autoExitLandmarks = null;
         this.restoreLiveFaceTexture();
         this.setState('WAITING');
       }
@@ -1754,7 +1410,7 @@ class App {
     const hasSnapshot = this.historyBuffer.hasCurrentVisitorSnapshot();
     const autonomous = this.appState === 'AUTONOMOUS';
     const captured = autonomous ? hasSnapshot : this.preferCapturedTexture && hasSnapshot;
-    button.disabled = autonomous || !hasSnapshot;
+    button.disabled = !this.renderer.isFaceTextureEnabled || autonomous || !hasSnapshot;
     button.textContent = autonomous && !hasSnapshot ? 'Texture : fallback'
       : captured ? 'Texture : FaceMesh' : 'Texture : Live';
     button.setAttribute('aria-pressed', String(captured));
@@ -1859,7 +1515,6 @@ class App {
     const button = document.getElementById('btn-toggle-minimalist');
     button?.classList.toggle('active', this.minimalistMode);
     button?.setAttribute('aria-pressed', String(this.minimalistMode));
-    this.setBustMode();
     if (this.lastRenderedTrackingResult?.detected) this.renderer.render(this.lastRenderedTrackingResult);
     this.canvasBroadcaster?.drawBroadcastFrame();
     if (!wasMinimalist && this.minimalistMode) {
@@ -1876,16 +1531,6 @@ class App {
     }
   }
 
-  setBustMode() {
-    this.bustModeRequested = true;
-    this.bustModeEnabled = this.bustModeRequested && (!this.minimalistMode || this.renderer.autonomousFallback);
-    this.renderer.setShowBust(this.bustModeEnabled);
-    this.faceMeshAlignmentControls?.sync();
-    document.body.classList.toggle('bust-only-mode', this.bustModeEnabled);
-    this.updateBroadcastBackground();
-    this.syncAlignProfile?.();
-  }
-
   setState(newState) {
     if (newState === 'AUTONOMOUS' && !this.canUseAutonomous()) {
       this.forceAutonomousMode = false;
@@ -1895,9 +1540,6 @@ class App {
     if (newState !== 'AUTONOMOUS') this.renderer.setAutonomousFallback(false);
     this.appState = newState;
     if (wasAutonomous && newState !== 'AUTONOMOUS') this.autonomousEngine.stopAutonomous();
-    if (wasAutonomous !== (newState === 'AUTONOMOUS')) {
-      this.setBustMode();
-    }
     this.updateBroadcastBackground();
     this.updateAnimationPlaybackUI();
     document.body.classList.toggle('state-autonomous', newState === 'AUTONOMOUS');

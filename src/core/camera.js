@@ -34,6 +34,7 @@ export class CameraManager {
     const constraints = {
       audio: false,
       video: {
+        facingMode: this.currentDeviceId ? undefined : 'user',
         deviceId: this.currentDeviceId ? { exact: this.currentDeviceId } : undefined,
         width: { ideal: resolution.width },
         height: { ideal: resolution.height },
@@ -79,7 +80,8 @@ export class CameraManager {
         console.warn('Retrying with basic fallback camera constraints...');
         try {
           const fallbackStream = await navigator.mediaDevices.getUserMedia({
-            video: { width: { ideal: 640 }, height: { ideal: 480 } }
+            audio: false,
+            video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }
           });
           this.stream = fallbackStream;
           this.video.srcObject = fallbackStream;

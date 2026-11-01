@@ -1,4 +1,15 @@
 // Local audio with a lightweight audio-driven mouth animation (no microphone).
+// Audio owns articulation while a track is playing. Clear the preset's lip
+// curls/presses as well, rather than stacking them on top of a talking jaw.
+// Smiles, frowns and the rest of the recorded expression remain intact.
+const AUDIO_MOUTH_REST = Object.freeze(Object.fromEntries([
+  'jawForward', 'jawLeft', 'jawRight', 'mouthClose', 'mouthLeft', 'mouthRight',
+  'mouthUpperUpLeft', 'mouthUpperUpRight', 'mouthLowerDownLeft', 'mouthLowerDownRight',
+  'mouthStretchLeft', 'mouthStretchRight', 'mouthFunnel', 'mouthPucker',
+  'mouthRollUpper', 'mouthRollLower', 'mouthShrugUpper', 'mouthShrugLower',
+  'mouthPressLeft', 'mouthPressRight'
+].map(name => [name, 0])));
+
 export class PresetAudioLipSync {
   constructor(urls = []) {
     this.urls = Array.isArray(urls) ? [...urls] : [urls];
@@ -18,8 +29,6 @@ export class PresetAudioLipSync {
     this.jaw = 0;
     this.jawTarget = 0;
     this.peak = 0.06;
-    this.rounded = 0;
-    this.spread = 0;
     this.lastAnalysisTime = null;
   }
 
@@ -47,7 +56,6 @@ export class PresetAudioLipSync {
       this.playbackGain.connect(output);
       this.playbackGain.connect(this.destination);
       this.wave = new Float32Array(this.analyser.fftSize);
-      this.spectrum = new Uint8Array(this.analyser.frequencyBinCount);
     }
     while (this.urls.some(url => !this.buffers.has(url))) {
       await Promise.all(this.urls.filter(url => !this.buffers.has(url)).map(async url => {
@@ -137,8 +145,6 @@ export class PresetAudioLipSync {
     this.jaw = 0;
     this.jawTarget = 0;
     this.peak = 0.06;
-    this.rounded = 0;
-    this.spread = 0;
     this.lastAnalysisTime = null;
   }
 
@@ -151,8 +157,6 @@ export class PresetAudioLipSync {
     if (!this.durationMs || !this.source || this.context.state !== 'running' || this.elapsedMs >= this.durationMs) {
       this.jaw = 0;
       this.jawTarget = 0;
-      this.rounded = 0;
-      this.spread = 0;
       this.lastAnalysisTime = null;
       return null;
     }
@@ -161,52 +165,26 @@ export class PresetAudioLipSync {
       : Math.max(0, Math.min(0.05, time - this.lastAnalysisTime));
     this.lastAnalysisTime = time;
     let target = 0;
-    let rounded = 0;
-    let spread = 0;
     if (this.source && this.elapsedMs < this.durationMs) {
       this.analyser.getFloatTimeDomainData(this.wave);
-      this.analyser.getByteFrequencyData(this.spectrum);
       const rms = Math.sqrt(this.wave.reduce((sum, value) => sum + value * value, 0) / this.wave.length);
       this.peak = Math.max(0.06, this.peak * Math.exp(-dt), rms);
       // Emphasize speech while keeping the mouth closed during silence.
       const energy = Math.max(0, Math.min(1, (rms - 0.008) / this.peak));
       const activation = Math.max(0, (energy - 0.14) / 0.86);
-      target = activation * activation * (3 - 2 * activation) * 0.45;
-      const band = (from, to) => {
-        const hzPerBin = this.context.sampleRate / this.analyser.fftSize;
-        const first = Math.max(0, Math.floor(from / hzPerBin));
-        const last = Math.min(this.spectrum.length - 1, Math.ceil(to / hzPerBin));
-        let sum = 0;
-        for (let i = first; i <= last; i++) sum += this.spectrum[i];
-        return sum / Math.max(1, last - first + 1);
-      };
-      const low = band(150, 800), mid = band(800, 2400);
-      const vowelBalance = low / Math.max(1, low + mid);
-      rounded = Math.max(0, Math.min(1, (vowelBalance - 0.25) * 1.5));
-      spread = 1 - rounded;
+      target = activation * activation * (3 - 2 * activation) * 0.32;
     }
     // Short attack and release preserve syllables without abrupt lip motion.
-    this.jawTarget += (target - this.jawTarget) * (1 - Math.exp(-dt / 0.010));
-    const jawResponse = this.jawTarget > this.jaw ? 0.015 : 0.022;
+    this.jawTarget += (target - this.jawTarget) * (1 - Math.exp(-dt / 0.015));
+    const jawResponse = this.jawTarget > this.jaw ? 0.035 : 0.060;
     this.jaw += (this.jawTarget - this.jaw) * (1 - Math.exp(-dt / jawResponse));
     if (target === 0 && this.jaw < 0.0005) this.jaw = this.jawTarget = 0;
-    this.rounded += (rounded - this.rounded) * (1 - Math.exp(-dt / 0.035));
-    this.spread += (spread - this.spread) * (1 - Math.exp(-dt / 0.035));
-    const opening = Math.min(1, this.jaw / 0.06);
-    const openingEase = opening * opening * (3 - 2 * opening);
-    const upperLift = this.jaw * (0.20 + this.spread * 0.10);
+    // A volume envelope cannot identify phonemes reliably. Use the model's jaw
+    // deformation alone instead of guessing lip lifts, smiles or vowel shapes.
     return {
+      ...AUDIO_MOUTH_REST,
       _audioArticulation: 1,
-      jawOpen: this.jaw,
-      mouthClose: 1 - openingEase * 0.85,
-      mouthUpperUpLeft: upperLift,
-      mouthUpperUpRight: upperLift,
-      mouthLowerDownLeft: this.jaw * 0.25,
-      mouthLowerDownRight: this.jaw * 0.25,
-      mouthStretchLeft: this.jaw * this.spread * 0.55,
-      mouthStretchRight: this.jaw * this.spread * 0.55,
-      mouthFunnel: this.jaw * this.rounded * 0.25,
-      mouthPucker: this.jaw * this.rounded * 0.55
+      jawOpen: this.jaw
     };
   }
 }

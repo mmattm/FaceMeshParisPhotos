@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fr">
 
 <head>
   <meta charset="UTF-8">
@@ -17,6 +17,52 @@
       <div class="loading-spinner"></div>
       <div id="loading-text" class="loading-text">Loading FaceMesh AI model...</div>
     </div>
+
+    <dialog id="settings-window" class="settings-window" aria-labelledby="settings-title">
+      <div class="settings-header">
+        <div><h1 id="settings-title">Réglages fins</h1><p>Zoom, expressions, mouvements et délais</p></div>
+        <button id="btn-close-settings" class="tool-btn" type="button" aria-label="Fermer les réglages">✕</button>
+      </div>
+      <div class="settings-body">
+        <div class="face-adjustment-control">
+          <label for="face-zoom">Zoom FaceMesh</label>
+          <input id="face-zoom" class="blend-slider" type="range" min=".5" max="2" step=".05" value="1" title="Zoom du visage dans tous les affichages, en Live et dans les presets. Réglage enregistré automatiquement.">
+          <output id="face-zoom-value" for="face-zoom">100 %</output>
+          <button id="btn-reset-face-zoom" class="tool-btn" type="button" title="Réinitialiser zoom facemesh" aria-label="Réinitialiser zoom facemesh">↺</button>
+        </div>
+        <div class="face-adjustment-control">
+          <label for="face-max-rotation">Rotation max</label>
+          <input id="face-max-rotation" class="blend-slider" type="range" min="0" max="180" step="5" value="180"
+            title="Limiter la rotation totale du visage : haut/bas, gauche/droite et inclinaison. 180° = libre. En Live et dans les presets.">
+          <output id="face-max-rotation-value" for="face-max-rotation">Libre</output>
+          <button id="btn-reset-face-max-rotation" class="tool-btn" type="button" title="Rétablir la rotation libre" aria-label="Rétablir la rotation libre">↺</button>
+        </div>
+        <div class="face-adjustment-control">
+          <label for="expression-intensity">Intensité</label>
+          <input id="expression-intensity" class="blend-slider" type="range" min="0" max="3" step=".05" value="1" title="Amplifier les expressions. 100 % = intensité normale.">
+          <output id="expression-intensity-value" for="expression-intensity">100 %</output>
+          <button id="btn-reset-expression-intensity" class="tool-btn" type="button" title="Réinitialiser intensité" aria-label="Réinitialiser intensité">↺</button>
+        </div>
+        <div class="face-adjustment-control">
+          <label for="face-pitch">Angle vertical</label>
+          <input id="face-pitch" class="blend-slider" type="range" min="-45" max="45" step=".5" value="0" title="Correction verticale en Live, dans les presets et en Minimaliste, enregistrée automatiquement.">
+          <output id="face-pitch-value" for="face-pitch">0°</output>
+          <button id="btn-reset-face-pitch" class="tool-btn" type="button" title="Réinitialiser l’angle vertical" aria-label="Réinitialiser l’angle vertical">↺</button>
+        </div>
+        <div class="face-adjustment-control">
+          <label for="slider-visitor-absence">Absence visiteur</label>
+          <input id="slider-visitor-absence" class="blend-slider" type="range" min="1" max="10" step="1" value="3" title="Durée sans visage avant une nouvelle visite.">
+          <output id="visitor-absence-val-label" for="slider-visitor-absence">3 s</output>
+          <span aria-hidden="true"></span>
+        </div>
+        <div class="face-adjustment-control">
+          <label for="audio-delay-ms">Délai audio</label>
+          <input id="audio-delay-ms" class="blend-slider" type="range" min="0" max="3000" step="10" value="0" title="Retarder le son par rapport aux lèvres, sur cet écran et en WebRTC.">
+          <output id="audio-delay-value" for="audio-delay-ms">0 ms</output>
+          <button id="btn-reset-audio-delay" class="tool-btn" type="button" title="Réinitialiser délai audio" aria-label="Réinitialiser délai audio">↺</button>
+        </div>
+      </div>
+    </dialog>
 
     <!-- ComfyUI Settings Modal -->
     <div id="comfy-settings-modal" class="upload-modal hidden">
@@ -78,15 +124,15 @@
 
         <div class="anim-lib-banner">
           <div class="anim-lib-desc">
-            <strong>Mode Autonome Aléatoire (50%) :</strong> En mode autonome, le masque alterne de manière fluide et
-            naturelle entre l'observation générale de l'espace et l'une de vos animations pré-enregistrées ci-dessous.
+            <strong>Mode autonome :</strong> à la perte du suivi, le visage joue vos presets manuels avec une transition
+            d’une demi-seconde. Sans preset disponible, il conserve sa dernière pose.
           </div>
           <div class="anim-lib-toggle-row">
             <label class="toggle-switch-label"
-              title="Activer / désactiver la lecture aléatoire des animations en mode autonome">
+              title="Activer / désactiver la lecture des presets manuels en mode autonome">
               <input type="checkbox" id="toggle-autonomous-playback" checked>
               <span class="toggle-slider"></span>
-              <span>Lecture aléatoire 50% en mode autonome</span>
+              <span>Lire les presets manuels en mode autonome</span>
             </label>
           </div>
         </div>
@@ -95,11 +141,11 @@
           <input id="motion-preset-name" class="motion-preset-name" type="text" maxlength="80"
             placeholder="Nom du preset (optionnel)" aria-label="Nom du nouveau preset">
           <button id="btn-record-motion-preset" class="tool-btn motion-preset-button" type="button"
-            aria-pressed="false" title="Enregistrer uniquement les mouvements du visage et de la tête, sans audio">
+            aria-pressed="false" title="Enregistrer les expressions, la rotation et la position 3D de la tête, sans audio">
             <span>● Enregistrer un preset</span>
           </button>
           <span id="motion-preset-status" class="motion-preset-status" role="status" aria-live="polite">
-            Commencez visage neutre · sans audio
+            Expressions + position 3D · sans audio
           </span>
         </div>
 
@@ -139,15 +185,7 @@
           <div class="audio-library-options">
             <button id="btn-audio-library-toggle" class="tool-btn" type="button">Activer l’audio</button>
           </div>
-          <div class="audio-delay-control">
-            <label for="audio-delay-ms">Délai du son après les lèvres</label>
-            <div class="audio-delay-row">
-              <input id="audio-delay-ms" class="blend-slider" type="range" min="0" max="3000" step="10" value="0">
-              <output id="audio-delay-value" for="audio-delay-ms">0 ms</output>
-              <button id="btn-reset-audio-delay" class="tool-btn" type="button" aria-label="Remettre le délai audio à zéro" title="Remettre à 0 ms">↺</button>
-            </div>
-            <p>0 = synchronisé. Augmenter retarde le son par rapport au lipsync, y compris sur le second écran.</p>
-          </div>
+
         </div>
         <div class="anim-list-header"><span>Bibliothèque audio</span><span id="audio-library-count">0 piste</span></div>
         <div id="audio-library-status" class="audio-library-status" role="status" aria-live="polite"></div>
@@ -161,13 +199,11 @@
       </div>
     </div>
 
-    <!-- Top Minimal Bar -->
     <header class="top-bar">
       <div class="bar-left">
         <div class="title-badge">SoftPhotography - Photobooth</div>
         <div class="mono-stat state-stat" id="state-stat-container">
-          <span class="state-indicator-dot" id="state-dot"></span>
-          <span>STATE:</span>
+          <span class="state-indicator-dot" id="state-dot"></span><span>STATE:</span>
           <strong id="app-state-label">LIVE</strong>
         </div>
         <button id="btn-copy-visitor-id" class="mono-stat visitor-status" type="button" disabled
@@ -188,7 +224,6 @@
           <span aria-hidden="true">▾</span>
         </button>
       </div>
-
     </header>
 
     <aside class="webrtc-preview-card" aria-label="Aperçu de la sortie vidéo WebRTC">
@@ -196,7 +231,7 @@
         <span><span class="webrtc-preview-live-dot"></span> VIDEO OUT</span>
         <span id="webrtc-preview-meta">1080×1080 · 30 FPS</span>
       </div>
-      <p style="font-size:12px; padding:8px 12px; overflow-wrap:anywhere">Source Navigateur OBS ? 1080 ? 1080 ? 30 FPS<br><code>/receiver.html?output=obs</code></p>
+      <p style="font-size:12px; padding:8px 12px; overflow-wrap:anywhere">Source Navigateur OBS · 1080 × 1080 · 30 FPS<br><code>/receiver.html?output=obs</code></p>
       <div id="webrtc-preview-slot" class="webrtc-preview-slot"></div>
       <div class="webrtc-preview-status webrtc-stat" id="webrtc-status-badge">
         <span class="state-indicator-dot" id="webrtc-dot"></span>
@@ -204,257 +239,39 @@
       </div>
     </aside>
 
-    <!-- Main Stage -->
     <main class="stage-container" id="stage-container">
       <div class="video-wrapper">
         <video id="webcam-video" autoplay playsinline muted></video>
         <canvas id="output-canvas"></canvas>
       </div>
-
-      <!-- Interactive 3D Camera Alignment Overlay & Guide Crosshair -->
-      <div id="align-overlay" class="align-overlay hidden">
-        <div id="align-crosshair" class="align-crosshair hidden">
-          <div class="crosshair-axis-x"></div>
-          <div class="crosshair-axis-y"></div>
-          <div class="crosshair-circle"></div>
-          <div class="crosshair-circle-outer"></div>
-        </div>
-        <div class="align-hint-badge">
-          <span class="align-dot"></span>
-          <span>Mode Alignement 3D actif</span>
-          <span class="align-hint-sep">•</span>
-          <span>Glisser : Orienter</span>
-          <span class="align-hint-sep">•</span>
-          <span>Shift+Glisser : Déplacer</span>
-          <span class="align-hint-sep">•</span>
-          <span>Molette : Zoom</span>
-        </div>
-      </div>
     </main>
 
-    <!-- Floating 3D Camera Offset & Alignment Card -->
-    <div id="align-panel" class="align-panel hidden">
-      <div class="align-panel-header">
-        <div class="align-title-group">
-          <span class="align-icon">📐</span>
-          <span class="align-title">Alignement Caméra 3D</span>
-          <span class="align-status-pill">ACTIF</span>
-        </div>
-        <button id="btn-close-align" class="tool-btn align-close-btn" title="Fermer le mode alignement (O)">✕</button>
-      </div>
-
-      <div class="align-panel-body">
-        <p id="align-profile-label" role="status">Profil : Live</p>
-        <!-- Déplacement Position X / Y -->
-        <div class="align-section">
-          <div class="align-section-header">
-            <span class="align-section-title">Position 3D (Déplacement)</span>
-          </div>
-          <div class="align-control-row">
-            <span class="align-label">Pos X</span>
-            <input type="range" id="slider-cam-x" class="blend-slider align-slider" min="-300" max="300" step="1"
-              value="0">
-            <span id="val-cam-x" class="align-val">0px</span>
-            <button class="align-btn-reset" data-axis="x" title="Réinitialiser X">↺</button>
-          </div>
-          <div class="align-control-row">
-            <span class="align-label">Pos Y</span>
-            <input type="range" id="slider-cam-y" class="blend-slider align-slider" min="-300" max="300" step="1"
-              value="0">
-            <span id="val-cam-y" class="align-val">0px</span>
-            <button class="align-btn-reset" data-axis="y" title="Réinitialiser Y">↺</button>
-          </div>
-        </div>
-
-        <!-- Inclinaison Rotation Haut/Bas (Pitch) & Gauche/Droite (Yaw) -->
-        <div class="align-section">
-          <div class="align-section-header">
-            <span class="align-section-title">Angle 3D (Inclinaison)</span>
-          </div>
-          <div class="align-control-row">
-            <span class="align-label">Haut / Bas</span>
-            <input type="range" id="slider-cam-pitch" class="blend-slider align-slider" min="-45" max="45" step="0.5"
-              value="0">
-            <span id="val-cam-pitch" class="align-val">0.0°</span>
-            <button class="align-btn-reset" data-axis="pitch" title="Réinitialiser Haut/Bas">↺</button>
-          </div>
-          <div class="align-control-row">
-            <span class="align-label">Gauche / Droite</span>
-            <input type="range" id="slider-cam-yaw" class="blend-slider align-slider" min="-45" max="45" step="0.5"
-              value="0">
-            <span id="val-cam-yaw" class="align-val">0.0°</span>
-            <button class="align-btn-reset" data-axis="yaw" title="Réinitialiser Gauche/Droite">↺</button>
-          </div>
-          <div class="align-control-row">
-            <span class="align-label">Roulis</span>
-            <input type="range" id="slider-cam-roll" class="blend-slider align-slider" min="-30" max="30" step="0.5"
-              value="0">
-            <span id="val-cam-roll" class="align-val">0.0°</span>
-            <button class="align-btn-reset" data-axis="roll" title="Réinitialiser Roulis">↺</button>
-          </div>
-        </div>
-
-        <!-- Zoom / Échelle -->
-        <div class="align-section">
-          <div class="align-section-header">
-            <span class="align-section-title">Échelle / Zoom</span>
-          </div>
-          <div class="align-control-row">
-            <span class="align-label">Zoom</span>
-            <input type="range" id="slider-cam-zoom" class="blend-slider align-slider" min="50" max="180" step="1"
-              value="100">
-            <span id="val-cam-zoom" class="align-val">100%</span>
-            <button class="align-btn-reset" data-axis="zoom" title="Réinitialiser Zoom">↺</button>
-          </div>
-        </div>
-
-        <!-- Options & Reset All -->
-        <div class="align-footer-row">
-          <label class="align-checkbox-label" title="Afficher un réticule central pour faciliter le calage">
-            <input type="checkbox" id="check-align-grid">
-            <span>Réticule repère</span>
-          </label>
-          <button id="btn-reset-cam-all" class="tool-btn" style="padding: 4px 10px; font-size: 11px;">
-            ↺ Tout réinitialiser
-          </button>
-        </div>
-        <div class="align-save-row">
-          <span id="align-save-status" role="status" aria-live="polite">Aucun réglage enregistré</span>
-          <button id="btn-save-cam" class="tool-btn" type="button"
-            title="Mémoriser la position, les angles et le zoom sur ce navigateur">💾 Save</button>
-        </div>
-      </div>
-    </div>
-
-    <section id="facemesh-position-panel" class="align-panel facemesh-position-panel hidden" aria-labelledby="facemesh-position-title">
-      <div class="align-panel-header">
-        <span id="facemesh-position-title" class="align-title">FaceMesh</span>
-        <button id="btn-close-facemesh-position" class="tool-btn align-close-btn" type="button" aria-label="Fermer les réglages FaceMesh">✕</button>
-      </div>
-      <div class="align-panel-body">
-        <p id="facemesh-position-context" class="facemesh-position-hint" role="status" aria-live="polite">Mode normal · alignement sur la caméra</p>
-        <p class="facemesh-position-hint">Déplacements en % de l’écart entre les yeux. Chaque mode conserve son propre réglage.</p>
-        <div class="facemesh-position-row">
-          <label for="facemesh-x">Gauche / droite</label>
-          <input id="facemesh-x" data-face-slider="x" class="blend-slider" type="range" min="-50" max="50" step="0.5" value="0">
-          <input data-face-number="x" type="number" aria-label="Position horizontale (%)" min="-50" max="50" step="0.5" value="0">
-        </div>
-        <div class="facemesh-position-row">
-          <label for="facemesh-y">Hauteur ↑</label>
-          <input id="facemesh-y" data-face-slider="y" class="blend-slider" type="range" min="-50" max="50" step="0.5" value="0">
-          <input data-face-number="y" type="number" aria-label="Hauteur (%)" min="-50" max="50" step="0.5" value="0">
-        </div>
-        <div class="facemesh-position-row">
-          <label for="facemesh-z">Vers l’avant</label>
-          <input id="facemesh-z" data-face-slider="z" class="blend-slider" type="range" min="-100" max="100" step="0.5" value="0">
-          <input data-face-number="z" type="number" aria-label="Profondeur (%)" min="-100" max="100" step="0.5" value="0">
-        </div>
-        <div class="facemesh-position-row">
-          <label for="facemesh-scale">Taille (%)</label>
-          <input id="facemesh-scale" data-face-slider="scale" class="blend-slider" type="range" min="50" max="150" step="0.5" value="100">
-          <input data-face-number="scale" type="number" aria-label="Taille (%)" min="50" max="150" step="0.5" value="100">
-        </div>
-        <span class="align-section-title">Inclinaison (°)</span>
-        <div class="facemesh-position-row">
-          <label for="facemesh-pitch">Haut / bas</label>
-          <input id="facemesh-pitch" data-face-slider="pitch" class="blend-slider" type="range" min="-45" max="45" step="0.5" value="0">
-          <input data-face-number="pitch" type="number" aria-label="Inclinaison haut / bas (°)" min="-45" max="45" step="0.5" value="0">
-        </div>
-        <div class="facemesh-position-row">
-          <label for="facemesh-yaw">Gauche / droite</label>
-          <input id="facemesh-yaw" data-face-slider="yaw" class="blend-slider" type="range" min="-45" max="45" step="0.5" value="0">
-          <input data-face-number="yaw" type="number" aria-label="Inclinaison gauche / droite (°)" min="-45" max="45" step="0.5" value="0">
-        </div>
-        <div class="facemesh-position-row">
-          <label for="facemesh-roll">Roulis</label>
-          <input id="facemesh-roll" data-face-slider="roll" class="blend-slider" type="range" min="-30" max="30" step="0.5" value="0">
-          <input data-face-number="roll" type="number" aria-label="Roulis (°)" min="-30" max="30" step="0.5" value="0">
-        </div>
-        <label class="align-checkbox-label">
-          <input id="check-facemesh-visible" type="checkbox" checked>
-          <span>Afficher le FaceMesh</span>
-        </label>
-        <div class="facemesh-position-actions">
-          <button id="btn-reset-facemesh-position" class="tool-btn" type="button">Réinitialiser</button>
-          <button id="btn-save-facemesh-position" class="tool-btn" type="button"
-            title="Mémoriser la position, les inclinaisons et la taille du FaceMesh sur ce navigateur">💾 Save</button>
-        </div>
-        <p id="facemesh-position-status" class="facemesh-position-hint" role="status" aria-live="polite">Cliquez sur Save pour mémoriser</p>
-      </div>
-    </section>
-
-    <!-- Center Bottom Panel -->
     <footer class="bottom-panel">
-      <!-- Motion-only preset recorder -->
-      <div class="looper-card">
-        <div class="simple-settings-row">
-          <label class="blend-control" for="slider-expression-intensity" title="Intensité des sourcils, du regard et du sourire pendant les presets">
-            <span>Expressions</span>
-            <input type="range" id="slider-expression-intensity" class="blend-slider" min="50" max="220" step="10" value="160" style="width: 85px;">
-            <span id="expression-intensity-value">160%</span>
-          </label>
-          <div class="blend-control"
-            title="Une nouvelle visite démarre au retour après cette durée sans visage (défaut : 3 secondes)">
-            <span>Absence visiteur:</span>
-            <input type="range" id="slider-visitor-absence" class="blend-slider" min="1" max="10" value="3"
-              style="width: 65px;">
-            <span id="visitor-absence-val-label" style="min-width: 28px;">3 s</span>
-          </div>
-          <details class="osc-dropdown">
-            <summary class="tool-btn">OSC</summary>
-            <div class="osc-dropdown-menu">
-          <button id="btn-test-osc" class="tool-btn" type="button" data-osc-signal="newVisitor"
-            title="Envoyer uniquement /newVisitor 1 en OSC vers PC 2, port 9000">
-            OSC · New Visitor
-          </button>
-          <button id="btn-test-osc-generation" class="tool-btn" type="button" data-osc-signal="generationDone"
-            title="Envoyer uniquement /generationDone 1 en OSC vers PC 2, port 9000">
-            OSC · Generation Done
-          </button>
-            </div>
-          </details>
-          <div class="visitor-test-row">
-          <button id="btn-debug-new-visitor" class="tool-btn debug-visitor-btn" type="button"
-            title="Simuler un nouveau visiteur : nouvelle capture FaceMesh et appel ComfyUI après 1 seconde si activé">
-            ↻ Test visiteur
-          </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Sub-controls: Align 3D, Autonome, Buste, ComfyUI -->
       <div class="sub-controls">
-        <!-- 3D Camera Alignment / Offset Mode Toggle -->
-        <button id="btn-toggle-align" class="tool-btn" title="Mode alignement 3D : déplacer et orienter la caméra (O)">
-          <span>📐 Align 3D</span>
-        </button>
-
-        <div class="divider-vert"></div>
-
-        <!-- Autonomous Mode Toggle -->
+        <div class="position-mode-controls" role="group" aria-label="Position du FaceMesh">
+          <button class="tool-btn active" type="button" data-position-mode="tracking" aria-pressed="true"
+            title="Suivre la position et la distance du visage en Live et dans les presets, dans tous les affichages">Tracking</button>
+          <button class="tool-btn" type="button" data-position-mode="centered" aria-pressed="false"
+            title="Verrouiller le visage au centre avec un cadrage rapproché, en conservant rotations et expressions dans tous les affichages">Locked</button>
+        </div>
+        <button id="btn-toggle-webcam" class="tool-btn active" type="button" aria-pressed="true"
+          title="Afficher la webcam derrière le visage en mode Live">📷 Webcam</button>
+        <button id="btn-toggle-expressions" class="tool-btn" type="button"
+          title="Inspecter les morph targets du modèle Face Cap">Expressions</button>
+        <button id="btn-toggle-untextured" class="tool-btn active" type="button" aria-pressed="true"
+          title="Afficher le visage sans photo, avec les normales colorées et les sourcils contrastés pour observer les expressions">Sans texture</button>
         <button id="btn-toggle-face-texture" class="tool-btn" type="button" aria-pressed="true" disabled
           title="Basculer entre la texture webcam et le cliché FaceMesh pendant le suivi Live">
           Texture : FaceMesh
         </button>
-
         <button id="btn-toggle-autonomous" class="tool-btn" disabled
           title="Activer / Forcer le mode autonome avec regard doux et saccades (A)">
           <span>🤖 Autonome</span>
         </button>
-
-        <div class="divider-vert"></div>
-
         <button id="btn-toggle-minimalist" class="tool-btn" type="button" aria-pressed="false"
-          title="Points blancs du FaceMesh sur fond noir, sans image caméra ni buste, également en WebRTC">
+          title="478 points de 4 px sur fond noir : MediaPipe en Live ; avant du visage et contours des yeux et lèvres renforcés en autonome. Également en WebRTC.">
           <span>⚪ Minimaliste</span>
         </button>
-
-        <button id="btn-facemesh-position" class="tool-btn" type="button" aria-expanded="false" aria-controls="facemesh-position-panel">
-          <span>↔ FaceMesh</span>
-        </button>
-
-        <div class="divider-vert"></div>
-
         <button id="btn-open-comfy-settings" class="tool-btn" type="button"
           title="Configurer l'adresse ComfyUI et le workflow">
           <span id="comfy-button-label">⚙ ComfyUI</span>
@@ -463,11 +280,27 @@
           title="Jouer les pistes de la bibliothèque avec les presets et synchroniser les mouvements de bouche">
           🔇 Audio
         </button>
+        <details class="osc-dropdown">
+          <summary class="tool-btn">OSC</summary>
+          <div class="osc-dropdown-menu">
+            <button id="btn-test-osc" class="tool-btn" type="button" data-osc-signal="newVisitor"
+            title="Envoyer uniquement /newVisitor 1 en OSC vers PC 2, port 9000">
+            OSC · New Visitor
+          </button>
+            <button id="btn-test-osc-generation" class="tool-btn" type="button" data-osc-signal="generationDone"
+            title="Envoyer uniquement /generationDone 1 en OSC vers PC 2, port 9000">
+            OSC · Generation Done
+          </button>
+          </div>
+        </details>
+        <button id="btn-debug-new-visitor" class="tool-btn debug-visitor-btn" type="button"
+            title="Simuler un nouveau visiteur : nouvelle capture FaceMesh et appel ComfyUI après 1 seconde si activé">
+            ↻ Test visiteur
+          </button>
+        <button id="btn-open-settings" class="tool-btn settings-launcher" type="button" aria-haspopup="dialog" aria-controls="settings-window">⚙ Réglages</button>
       </div>
     </footer>
   </div>
-
   <script type="module" src="./src/main.js"></script>
 </body>
-
 </html>

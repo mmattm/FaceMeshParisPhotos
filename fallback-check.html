@@ -1,27 +1,135 @@
-<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:#eae7e2}canvas{width:100vw;height:100vh;object-fit:cover}pre{position:fixed;top:0;background:white;color:black;font:14px monospace;z-index:5}</style></head><body><canvas id="scene" width="1280" height="720"></canvas><pre id="result">RUNNING</pre><script type="module">
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><title>Face Cap — vérification</title>
+<style>body{margin:0;background:#222;color:white;font:13px monospace}#views{display:grid;grid-template-columns:1fr 1fr}figure{margin:8px}img{width:100%}canvas{display:none}pre{white-space:pre-wrap;padding:8px}</style>
+</head><body><canvas id="scene"></canvas><pre id="result">RUNNING</pre><div id="views"></div><script type="module">
+import * as THREE from 'three';
 import { FaceTracker } from '/src/core/tracker.js';
 import { FaceMeshRenderer } from '/src/core/renderer.js';
 import { AutonomousGazeEngine } from '/src/core/autonomousGazeEngine.js';
 import { createFallbackFaceLandmarks } from '/src/core/fallbackFace.js';
+import { generatePresetAnimations } from '/src/core/presetAnimations.js';
+import { MotionPresetRecorder } from '/src/mocap/motionPresetRecorder.js';
+import { FACE_HANDOFF_DURATION_MS } from '/src/core/faceCapRig.js';
+const errors=[];
+window.addEventListener('error', event=>errors.push(event.message));
+const originalError=console.error;
+console.error=(...args)=>{const message=args.map(String).join(' ');if(!message.startsWith('INFO:'))errors.push(message);originalError(...args);};
 try {
-  const tracker = new FaceTracker({smoothing:false});
+  const renderer=new FaceMeshRenderer(document.querySelector('#scene'));
+  await renderer.init();
+  // Static rendering checks; the half-second handoff is tested separately.
+  renderer.faceTransition.durationMs=0;
+  const defaultUntextured=!renderer.isFaceTextureEnabled && renderer.face.material.isMeshNormalMaterial;
+  renderer.setFaceTextureEnabled(true);
+  renderer.resize(960,720,1);
+  const tracker=new FaceTracker({smoothing:false});
   await tracker.init();
-  const renderer = new FaceMeshRenderer(document.querySelector('#scene'));
-  renderer.resize(1280,720,1);
   await renderer.loadFallbackFaceTexture(tracker);
   renderer.setAutonomousFallback(true);
-  renderer.setShowBust(true);
-  renderer.renderer.setClearColor(0xeae7e2,1);
-  const engine = new AutonomousGazeEngine();
-  engine.setBaseLandmarks(createFallbackFaceLandmarks(16/9));
-  engine.startAutonomous(1000);
-  await renderer.bustOverlay.loading.get(renderer.bustOverlay.selectedModel);
-  let frame;
-  for(let i=0;i<90;i++) frame = engine.generateFrame(1000+i*16.67,1280,720);
+  const landmarks=createFallbackFaceLandmarks(16/9);
+  const frame={detected:true,isAutonomous:true,landmarks,headPose:{pitch:0,yaw:0,roll:0},blendshapes:{}};
+  const capture=(name,result)=>{
+    renderer.render(result);
+    const figure=document.createElement('figure');
+    const image=document.createElement('img');image.src=renderer.canvas.toDataURL();
+    const caption=document.createElement('figcaption');caption.textContent=name;
+    figure.append(image,caption);document.querySelector('#views').append(figure);
+  };
+  capture('Neutre · photo sur la peau, yeux et dents Face Cap',frame);
+  capture('Sourire + mâchoire ouverte + regard', {...frame,blendshapes:{jawOpen:.65,mouthSmileLeft:.8,mouthSmileRight:.8,eyeLookOutLeft:.4,eyeLookInRight:.4}});
+  const jaw=renderer.face.morphTargetInfluences[renderer.face.morphTargetDictionary.jawOpen];
+  const frozenCanvas=document.createElement('canvas');
+  const image=renderer.fallbackTexture.image;frozenCanvas.width=image.width;frozenCanvas.height=image.height;
+  frozenCanvas.getContext('2d').drawImage(image,0,0);
+  renderer.setAutonomousFallback(false);
+  renderer.freezeFaceTexture(frozenCanvas,renderer.fallbackTextureLandmarks);
+  const matrix=new THREE.Matrix4().makeTranslation(0,0,-45).toArray();
+  capture('Pose MediaPipe directe · cliché mémorisé', {...frame,isAutonomous:false,headPose:{matrix},blendshapes:{eyeBlinkLeft:1,browInnerUp:.5}});
+  const directPose=renderer.faceContainer.matrix.equals(new THREE.Matrix4().fromArray(matrix));
+  const frozenMap=renderer.photoMaterial.map===renderer.freezeTexture;
+  renderer.unfreezeFaceTexture();renderer.setAutonomousFallback(true);
+  const engine=new AutonomousGazeEngine();engine.setBaseLandmarks(landmarks);engine.startAutonomous(1000);
+  let generated;for(let i=0;i<90;i++)generated=engine.generateFrame(1000+i*16.67,1280,720);
+  capture('Mode autonome · même modèle et même texture',generated);
+  const positionInput=new THREE.Matrix4().makeRotationY(.25).setPosition(6,-3,-42).toArray();
+  let centeredAllModes=true,trackingAllModes=true;
+  for(const minimalist of [false,true]) for(const textured of [false,true]) for(const autonomous of [false,true]){
+    renderer.setMinimalistMode(minimalist);renderer.setFaceTextureEnabled(textured);
+    const positionedFrame={...frame,isAutonomous:autonomous,headPose:{matrix:positionInput},blendshapes:{jawOpen:.25}};
+    renderer.setPositionMode('centered');renderer.render(positionedFrame);
+    centeredAllModes &&= new THREE.Vector3(0,-.5,4.5).applyMatrix4(renderer.faceContainer.matrix)
+      .distanceTo(new THREE.Vector3(0,0,-28))<1e-8;
+    renderer.setPositionMode('tracking');renderer.render(positionedFrame);
+    trackingAllModes &&= renderer.faceContainer.matrix.equals(new THREE.Matrix4().fromArray(positionInput));
+  }
+  renderer.setFaceTextureEnabled(true);
+  renderer.setPositionMode('centered');
+  renderer.setMinimalistMode(true);
+  const offsetMatrix=new THREE.Matrix4().makeRotationY(.35).setPosition(12,-7,-30).toArray();
+  capture('Minimaliste · 478 landmarks, iris compris', {...frame,isAutonomous:false,headPose:{matrix:offsetMatrix}});
+  const minimal=renderer.points.visible&&!renderer.face.visible&&!renderer.points.geometry.morphAttributes.position
+    &&renderer.points.geometry.drawRange.count===478;
+  const minimalCentered=new THREE.Vector3(0,-.5,4.5).applyMatrix4(renderer.faceContainer.matrix).distanceTo(new THREE.Vector3(0,0,-28))<1e-8;
+  const pointCount=renderer.points.geometry.attributes.position.count,pointSize=renderer.points.material.size;
+  renderer.render({...generated,headPose:{matrix:offsetMatrix}});
+  const minimalAutonomous=renderer.points.visible&&renderer.points.geometry.drawRange.count===478;
+  renderer.setMinimalistMode(false);renderer.setPositionMode('tracking');renderer.render(frame);
+  renderer.setFaceTextureEnabled(false);
+  capture('Sans texture · normales colorées', {...frame,blendshapes:{jawOpen:.5,mouthSmileLeft:.7}});
+  const untextured=renderer.face.material.isMeshNormalMaterial && !renderer.photoMaterial.map;
+  renderer.setFaceTextureEnabled(true);renderer.render(frame);
+  const textureRestored=renderer.face.material===renderer.photoMaterial && renderer.photoMaterial.map===renderer.fallbackTexture;
+  const catalog=await fetch('/api/animations').then(response=>response.json());
+  // Use an in-memory diagnostic; never change the operator's animation catalog.
+  const [preset]=generatePresetAnimations();
+  engine.playAnimation(preset,3000);
+  let nativeCentered=true,nativeModelMatrix=true,nativeLoop=true;
+  for(const [time,label] of [[0,'gauche'],[4500,'haut'],[8500,'droite'],[12500,'bas']]) {
+    const native=engine.generateFrame(3000+time,1280,720);
+    capture(`Preset Face Cap · ${label}`,native);
+    const matrix=new THREE.Matrix4().fromArray(native.headPose.matrix);
+    nativeCentered &&= new THREE.Vector3(0,-.5,4.5).applyMatrix4(matrix).distanceTo(new THREE.Vector3(0,0,-48))<1e-8;
+    nativeModelMatrix &&= renderer.faceContainer.matrix.equals(matrix);
+  }
+  const first=engine.generateFrame(3000,1280,720);
+  const entryDelay=engine.continuousPresetHandoff?0:FACE_HANDOFF_DURATION_MS;
+  for(const time of [1,2,3].map(cycle=>entryDelay+cycle*preset.durationMs)) {
+    const repeated=engine.generateFrame(3000+time,1280,720);
+    nativeLoop &&= repeated.activeAnimationName===preset.name && JSON.stringify(repeated.headPose.matrix)===JSON.stringify(first.headPose.matrix);
+  }
+  const recorder=new MotionPresetRecorder();recorder.start(1000);
+  const recordedMatrices=[new THREE.Matrix4().makeRotationY(.2).setPosition(-5,2,-45).toArray(),
+    new THREE.Matrix4().makeRotationY(-.2).setPosition(7,-3,-38).toArray(),
+    new THREE.Matrix4().makeRotationY(.3).setPosition(3,1,-52).toArray()];
+  recordedMatrices.forEach((matrix,index)=>recorder.capture({detected:true,headPose:{matrix,
+    x:matrix[12],y:matrix[13],z:matrix[14],pitch:0,yaw:0,roll:0},blendshapes:{jawOpen:.2}},1000+400*index));
+  const recorded=recorder.stop('Vérification locale',1800);engine.playAnimation(recorded,20000);
+  engine.generateFrame(20000,1280,720);
+  const recordedEntryDelay=engine.continuousPresetHandoff?0:FACE_HANDOFF_DURATION_MS;
+  const positioned=engine.generateFrame(20400+recordedEntryDelay,1280,720);
+  capture('Preset enregistré · position 3D conservée',positioned);
+  const recordedPosition=positioned.headPose.matrix.every((value,index)=>Math.abs(value-recordedMatrices[1][index])<1e-8);
+  const recordedExpressions=positioned.blendshapes.jawOpen===.2;
+  let existingRecordingPosition=true;
+  const existing=catalog.find(item=>item.id.startsWith('recorded_'));
+  if(existing){
+    const clip=await fetch(`/animations/${existing.filename}`).then(response=>response.json());
+    engine.playAnimation(clip,30000);
+    const played=engine.generateFrame(30000,1280,720);
+    const expectedPose=clip.frames[0].headPose;
+    // The full metric matrix is authoritative; the redundant XYZ fields may
+    // have been rounded to four decimals when the performance was saved.
+    existingRecordingPosition=expectedPose.matrix?.length===16
+      ? played.headPose.matrix.every((value,i)=>Math.abs(value-expectedPose.matrix[i])<1e-6)
+      : ['x','y','z'].every((key,i)=>Math.abs(played.headPose.matrix[12+i]-expectedPose[key])<1e-6);
+  }
   renderer.render(frame);
-  const output = document.createElement('canvas'); output.width=1080;output.height=1080;
-  output.getContext('2d').drawImage(renderer.canvas,280,0,720,720,0,0,1080,1080);
-  const detected = tracker.detectReferenceLandmarks(output);
-  document.querySelector('#result').textContent=JSON.stringify({textureLandmarks:renderer.fallbackTextureLandmarks.length,outputDetected:!!detected,outputLandmarks:detected?.length,bustLoaded:renderer.bustOverlay.models.size,wireframe:renderer.fallbackFaceMaterial.wireframe});
-} catch(error) {document.querySelector('#result').textContent='ERROR: '+error.stack;}
+  const report={modelLoaded:true,morphTargets:Object.keys(renderer.face.morphTargetDictionary).length,
+    referenceLandmarks:renderer.fallbackTextureLandmarks.length,originalEyeTexture:!!renderer.model.getObjectByName('mesh_0')?.material.map,
+    jawOpen:jaw,directPose,frozenMap,minimal,minimalCentered,minimalAutonomous,centeredAllModes,trackingAllModes,pointCount,pointSize,defaultUntextured,recordedPosition,recordedExpressions,existingRecordingPosition,untextured,textureRestored,nativeCentered,nativeModelMatrix,nativeLoop,catalogCount:catalog.length,cameraPosition:renderer.camera.position.toArray(),cameraFov:renderer.camera.fov,
+    resetJaw:renderer.face.morphTargetInfluences[renderer.face.morphTargetDictionary.jawOpen],
+    webglError:renderer.renderer.getContext().getError(),errors};
+  window.__facecapReport=report;
+  document.querySelector('#result').textContent=JSON.stringify(report,null,2);
+} catch(error) {window.__facecapReport={error:error.stack,errors};document.querySelector('#result').textContent='ERROR: '+error.stack;}
 </script></body></html>

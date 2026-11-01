@@ -1,0 +1,7 @@
+Face Cap demo model
+Creator: Face Cap / bannaflak — https://www.bannaflak.com/face-cap
+Source: https://github.com/mrdoob/three.js/blob/dev/examples/models/gltf/facecap.glb
+Example: https://threejs.org/examples/webgl_morphtargets_webcam.html
+Downloaded: 2026-10-31
+
+The original model is used with its morph targets, eye texture and teeth.

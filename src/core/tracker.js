@@ -5,6 +5,9 @@
 import { FilesetResolver, FaceLandmarker } from '@mediapipe/tasks-vision';
 import * as THREE from 'three';
 import { MultiOneEuroFilter, OneEuroFilter } from '../mocap/oneEuroFilter.js';
+import { PoseContinuityGuard } from './poseContinuityGuard.js';
+
+const STALE_TRACKING_MS = 250;
 
 // Oral & Mandibular Landmark Indices for Adaptive Micro-Jitter Suppression
 const ORAL_LANDMARK_INDICES = [
@@ -42,6 +45,7 @@ export class FaceTracker {
     this.scaleHelper = new THREE.Vector3();
 
     this.lastVideoTime = -1;
+    this.poseGuard = new PoseContinuityGuard();
     this.inferenceLatencyMs = 0;
     this.irisSmoothed = new Array(10).fill(null);
     this.mouthSmoothed = new Map();
@@ -161,10 +165,12 @@ export class FaceTracker {
 
     if (videoElement.currentTime === this.lastVideoTime) {
       if (this.lastTrackingResult) {
+        if (timestampMs - this.lastTrackingResult.timestamp > STALE_TRACKING_MS) {
+          return { detected: false, isNewFrame: false, timestamp: timestampMs, latencyMs: this.inferenceLatencyMs };
+        }
         return {
           ...this.lastTrackingResult,
-          isNewFrame: false,
-          timestamp: timestampMs
+          isNewFrame: false
         };
       }
       return null;
@@ -179,11 +185,13 @@ export class FaceTracker {
       results = this.faceLandmarker.detectForVideo(videoElement, this.lastInferenceTime);
     } catch (e) {
       console.warn('FaceLandmarker detectForVideo error:', e);
-      return null;
+      this.lastTrackingResult = { detected: false, isNewFrame: true, timestamp: timestampMs,
+        latencyMs: performance.now() - start };
+      return this.lastTrackingResult;
     }
     this.inferenceLatencyMs = performance.now() - start;
 
-    const formatted = this._formatTrackingResult(results, timestampMs);
+    const formatted = this.poseGuard.update(this._formatTrackingResult(results, timestampMs));
     formatted.isNewFrame = true;
     this.lastTrackingResult = formatted;
     return formatted;
@@ -224,6 +232,7 @@ export class FaceTracker {
     if (!results || !results.faceLandmarks || results.faceLandmarks.length === 0) {
       return {
         detected: false,
+        timestamp: timestampMs,
         latencyMs: this.inferenceLatencyMs
       };
     }
@@ -233,7 +242,7 @@ export class FaceTracker {
 
     // Adaptive ocular saccade stabilizer for iris landmarks (468 to 477)
     // Eliminates micro-jitter when fixating, while preserving instantaneous saccades
-    if (landmarks.length >= 478) {
+    if (this.useSmoothing && landmarks.length >= 478) {
       const stableLandmarks = landmarks.slice();
       for (let i = 468; i < 478; i++) {
         const rawPt = landmarks[i];
@@ -342,7 +351,7 @@ export class FaceTracker {
         x: posX,
         y: posY,
         z: posZ,
-        matrix: rawMatrix
+        matrix: Array.from(rawMatrix)
       };
     }
 

@@ -50,6 +50,9 @@ export class MotionPresetRecorder {
       y: number(pose.y, 4),
       z: number(pose.z, 4)
     };
+    if (pose.matrix?.length === 16 && Array.from(pose.matrix).every(Number.isFinite)) {
+      headPose.matrix = Array.from(pose.matrix);
+    }
 
     this.frames.push({
       timeOffsetMs: Math.round(Math.min(this.maxDurationMs, now - this.startedAt)),
@@ -78,11 +81,6 @@ export class MotionPresetRecorder {
     const durationMs = Math.max(lastOffset, Math.round(1000 / this.fps));
     const baselineFrames = frames.filter(frame => frame.timeOffsetMs <= 350);
     const referenceFrames = baselineFrames.length > 0 ? baselineFrames : [frames[0]];
-    const allBlendshapeKeys = new Set(referenceFrames.flatMap(frame => Object.keys(frame.blendshapes)));
-    const blendshapeBaseline = {};
-    for (const key of allBlendshapeKeys) {
-      blendshapeBaseline[key] = referenceFrames.reduce((sum, frame) => sum + (frame.blendshapes[key] || 0), 0) / referenceFrames.length;
-    }
 
     const poseKeys = ['pitch', 'yaw', 'roll', 'x', 'y', 'z'];
     const referenceHeadPose = {};
@@ -103,18 +101,14 @@ export class MotionPresetRecorder {
       fps: Number((((frames.length - 1) * 1000) / durationMs).toFixed(2)),
       createdAt: new Date().toISOString(),
       hasAudio: false,
+      rig: 'facecap',
+      poseSpace: 'mediapipe',
       referenceHeadPose,
       frames: frames.map(frame => ({
         timeOffsetMs: frame.timeOffsetMs,
-        headPose: { ...frame.headPose },
+        headPose: { ...frame.headPose, ...(frame.headPose.matrix ? { matrix: [...frame.headPose.matrix] } : {}) },
         blendshapes: Object.fromEntries(Object.entries(frame.blendshapes)
-          .filter(([key]) => key !== '_neutral')
-          .map(([key, value]) => {
-            const baseline = blendshapeBaseline[key] || 0;
-            const delta = Math.max(0, value - baseline);
-            const normalized = delta < 0.012 ? 0 : delta / Math.max(0.25, 1 - baseline);
-            return [key, Number(Math.min(1, normalized).toFixed(4))];
-          }))
+          .filter(([key]) => key !== '_neutral'))
       }))
     };
 

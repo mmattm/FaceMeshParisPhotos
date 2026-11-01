@@ -17,7 +17,7 @@
 
 Le système capture en direct les expressions faciales, les micro-mouvements et l'orientation 6-DoF de la tête d'un visiteur à 60 FPS via un modèle d'IA vision par ordinateur (MediaPipe FaceLandmarker). Il compense les mouvements rigides grâce à un système de coordonnées crâniennes local, puis projette des performances faciales enregistrées ou autonomes sur le visage de la personne présente.
 
-Lorsque personne n'est détecté, ou en transition subtile, le masque entre en **Mode Autonome** : il explore l'espace avec des micro-saccades oculaires naturelles, un réflexe vestibulo-oculaire (VOR), des clignements anatomiques complets et joue les cinq animations prédéfinies sans audio du catalogue fourni.
+Quand le suivi disparaît, le visage passe en **Mode Autonome** : il joue uniquement les presets manuels enregistrés ou importés. La position, la rotation et les expressions rejoignent le preset en une demi-seconde ; les enchaînements entre lectures sont également lissés. Sans preset manuel disponible, le visage conserve sa dernière pose. Aucun mouvement de regard, clignement ou expression n’est généré automatiquement.
 
 Dès le premier visage, puis au retour après au moins **3 secondes sans visage détecté**, une nouvelle visite démarre, même si la même personne revient. Le délai est réglable de 1 à 10 secondes avec **Absence visiteur**. Aucune comparaison de visages n'est effectuée. Le système met à jour sa référence faciale, signale l'événement au récepteur **WebRTC** et peut lancer automatiquement un workflow **ComfyUI**. Sortir du carré de sortie ou forcer le mode autonome ne compte pas comme une absence tant que la webcam détecte encore le visage.
 
@@ -25,28 +25,37 @@ Dès le premier visage, puis au retour après au moins **3 secondes sans visage 
 
 ## ✨ Fonctionnalités Majeures
 
-### 1. Suivi & Retargeting Facial 3D Haute Fidélité
-- **468 Repères MediaPipe** : Cartographie topologique dense du visage en temps réel.
-- **Référentiel Crânien Local Invariant** : Normalisation 3D insensible à la distance de la caméra et aux rotations de la tête.
-- **Masque Sculptural 3D** :
-  - Yeux 3D avec sclère, iris texturé, pupille et reflet spéculaire (catchlight).
-  - Écrêtage au pochoir (*stencil buffer*) : les yeux ne dépassent jamais hors du creux palpébral.
-  - Cavité buccale 3D anatomique avec un voile d'obscurcissement à 50% d'opacité (préservant la transparence sur le fond réel).
+### 1. Visage Face Cap et caméra frontale (branche expérimentale)
+- Le modèle `public/models/facecap.glb` de l’[exemple three.js](https://threejs.org/examples/webgl_morphtargets_webcam.html) remplace le buste et l’ancien masque calculé à partir des landmarks.
+- Les expressions MediaPipe pilotent les morph targets du modèle. Ses yeux texturés et ses dents sont conservés ; aucun œil ou intérieur de bouche supplémentaire n’est généré.
+- **Intensité** : le slider règle les expressions de 0 à 300 % en Live, dans les presets et avec le lipsync audio, dans tous les affichages. 100 % correspond à l’intensité normale ; ↺ revient à 100 %. Les clignements et plissements des yeux restent indépendants du slider, même à 0 %, tandis que l’ouverture des yeux peut être amplifiée, avec une ouverture maximale légèrement renforcée de 10 %. La fin du clignement est renforcée pour atteindre une fermeture complète dès un score de 0,6 ; l’ouverture est atténuée pendant le clignement pour ne pas contrarier la paupière. Le réglage est mémorisé et ne modifie ni la pose, ni la direction du regard, ni les enregistrements.
+- **Angle vertical** : correction manuelle de −45° à +45°, enregistrée automatiquement dans le navigateur ; ↺ revient à 0°. Elle incline le visage autour de son centre dans tous les affichages, en Live comme en autonome, y compris les presets et Minimaliste, en Tracking comme en Locked. Les données enregistrées gardent leur pose originale et les transitions restent lissées. L’ancien réglage mémorisé est conservé.
+- **Réglages fins** : le bouton **Réglages** regroupe uniquement les sliders : zoom, rotation maximale, intensité, angle vertical, absence visiteur et délai audio. Les boutons d’affichage, bibliothèques, Autonome, ComfyUI, audio et OSC restent directement accessibles sur la vue principale.
+- **Rotation max** : limite l’angle total de rotation par rapport à la position frontale, dans toutes les directions, en Live, dans les presets et en Minimaliste. De 0° (orientation frontale fixe) à 180° (**Libre**, valeur initiale et remise à zéro via ↺). Le réglage est mémorisé ; la position, le zoom, les expressions et les enregistrements restent indépendants. La limite s’applique aussi pendant les raccords entre modes et entre presets.
+- **Zoom FaceMesh** : de 50 à 200 %, mémorisé dans le navigateur, avec retour à 100 % via ↺. Il agrandit le visage autour de son centre dans tous les affichages, y compris Minimaliste, en Tracking comme en Locked et en Live comme dans les presets. Il ne modifie ni la caméra, ni le fond webcam, ni les enregistrements.
+- La caméra perspective reste à l’origine, orientée vers −Z, avec un champ vertical de 63°. La matrice de pose MediaPipe est appliquée directement. La scène entière est réfléchie pour l’affichage selfie.
+- La photo du visiteur est transférée sur la peau par les triangles du visage canonique. Les UV du cliché restent attachés au modèle pendant les expressions, en Live comme en Autonome.
+- **Tracking / Locked** : choix commun aux rendus avec photo, sans texture et Minimaliste, en Live, Autonome et lecture de presets. Tracking conserve la position et la distance suivies ou enregistrées ; Locked fixe le visage au centre avec un cadrage rapproché identique dans tous les affichages, tout en gardant rotations et expressions. La webcam de fond est masquée en Locked. Le choix est mémorisé dans le navigateur, avec Tracking par défaut. Les enregistrements gardent toujours la pose réelle.
+- Le bouton **Webcam** affiche ou masque la vidéo de fond en Live. **Expressions** ouvre les valeurs des morph targets. **Sans texture**, actif par défaut, affiche les normales colorées du visage avec des sourcils sombres attachés à la peau et aux morph targets pour mieux lire leurs mouvements, en Live comme en Autonome ; un second clic restaure la photo. Les anciens profils Align 3D ne sont plus utilisés.
+- Les ressources du modèle et le décodeur KTX2 des yeux sont locaux (`public/models/facecap.glb`, `public/wasm/basis/`).
 
-### 2. Moteur de Comportement & Regard Autonome (`AutonomousGazeEngine`)
-- **Regard Vivant & Naturel** : Parcours doux et réaliste du champ de vision sans exagération vers les bords, avec adaptation aux fortes inclinaisons de tête.
-- **Clignement Anatomique Complet** : Fermeture douce de l'ensemble de la fente palpébrale et descente du pli orbitaire (sans pincement isolé).
-- **Réflexe Vestibulo-Oculaire (VOR)** : Compensation oculaire des mouvements de tête pour fixer un point de curiosité.
-- **Alternance Dynamique 50%** : Bascule fluide entre exploration procédurale et jeu de performances enregistrées issues du catalogue d'animations.
+### 2. Lecture autonome des presets manuels (`AutonomousGazeEngine`)
+- À la perte du suivi, les presets manuels sont lus sans ajouter de mouvements procéduraux.
+- Un raccord **ease-in-out de 0,5 seconde** lisse pose et expressions à l’entrée, au retour vers le suivi Live et entre les lectures. À l’entrée depuis le Live, le visage rejoint la première image du preset avant que sa lecture commence : la bouche ne passe pas par une expression neutre intermédiaire. Entre presets et à chaque reprise de boucle, le preset suivant avance pendant le fondu, sans pause sur sa première pose. En Locked, le visage reste centré pendant tout le raccord.
+- Les performances s’enchaînent ; si plusieurs sont disponibles, la sélection évite de répéter immédiatement la même.
+- Une bibliothèque vide reste vide. Sans preset, ou si leur lecture automatique est désactivée, la dernière pose est conservée.
+- Au retour d’un visage, la pose et les expressions rejoignent le suivi Live en une demi-seconde, puis le suivi reste brut sans lissage supplémentaire.
 
 ### 3. Bibliothèque d'Animations (`AnimationLibrary`)
-- **Expressions** : Le curseur en bas règle l’intensité de 50 à 220 %, avec 160 % par défaut. Sourcils, regard et sourire sont renforcés ; 100 % retrouve le rendu sans amplification supplémentaire. Le choix reste mémorisé dans le navigateur. Les fichiers enregistrés et les mouvements de tête restent inchangés, ainsi que l’articulation de la bouche pendant le lipsync.
+- **Catalogue manuel** : seuls les presets enregistrés ou importés avec une pose métrique sont lus automatiquement. Ouvrir **Animation** puis **▶ Tester** pour une lecture manuelle. Désactiver **Autonome** pour reprendre le Live.
+- **Protection des pertes de suivi** : Les changements brusques de pose non confirmés sont écartés avant l’affichage et l’enregistrement, notamment lorsqu’une main masque la webcam. La transition autonome part ainsi de la dernière pose fiable. Une vraie rotation rapide est acceptée après une courte confirmation.
+- **Live direct** : Les scores MediaPipe et la matrice de pose sont appliqués tels quels au modèle Face Cap, comme dans l’exemple three.js. L’ancien calibrateur (gains/gamma), l’amplification des expressions, les déformations et les transitions de landmarks ne participent plus au Live. Le suivi reste Live partout dans l’image webcam ; le recadrage OBS ne déclenche pas de mouvement autonome.
 - **Bibliothèque audio** : Cliquez sur **Audio** en haut pour afficher les pistes de `public/audio/`. **Écouter** permet une préécoute, **Utiliser** sélectionne une piste pour les presets et **Alterner toutes les pistes** réactive la rotation de toute la bibliothèque. La sélection reste mémorisée dans le navigateur. Vous pouvez importer, télécharger ou retirer une piste. Les pistes retirées restent récupérables dans `.audio-trash/`, hors du dossier public.
-- **Audio** : Un clic sur **🔇 Audio** en bas active les pistes sélectionnées en test manuel comme en mode autonome. L’audio pilote uniquement le lipsync : les presets d’animation gardent leur durée, leurs mouvements et la pose du visage et du buste, avec le regard autonome aléatoire. Changer de piste ne redémarre pas les gestes. Une courte pause sépare les lectures. Le son s’arrête au retour en Live ou en désactivant le bouton. Le badge **Audio** indique le fichier en cours. La préécoute suspend la piste des presets pour éviter les sons superposés.
-- **Décalage audio/lipsync** : La bibliothèque audio propose un délai de 0 à 2 000 ms, mémorisé dans le navigateur. Il retarde le son après les lèvres, sur l’ordinateur comme en WebRTC, sans décaler l’analyse des mouvements. La fin de piste différée est jouée en entier et l’arrêt du mode autonome coupe aussi le son en attente.
+- **Audio** : Un clic sur **🔇 Audio** en bas active les pistes sélectionnées en test manuel comme en mode autonome. L’audio pilote uniquement le lipsync : les presets d’animation gardent leur durée, leurs mouvements et la pose du visage, avec le regard défini par le preset Face Cap. Changer de piste ne redémarre pas les gestes. Une courte pause sépare les lectures. Le son s’arrête au retour en Live ou en désactivant le bouton. Le badge **Audio** indique le fichier en cours. La préécoute suspend la piste des presets pour éviter les sons superposés.
+- **Décalage audio/lipsync** : La fenêtre **Réglages** propose un délai de 0 à 3 000 ms, mémorisé dans le navigateur. Il retarde le son après les lèvres, sur l’ordinateur comme en WebRTC, sans décaler l’analyse des mouvements. La fin de piste différée est jouée en entier et l’arrêt du mode autonome coupe aussi le son en attente.
 - **Hébergement** : La liste audio est intégrée au build pour fonctionner aussi sur un hébergement statique. L’import et le retrait nécessitent le serveur Vite (`npm run dev` ou `npm run preview`).
 - **Bouche sans audio** : En l’absence de lecture audio, la bouche suit les expressions et mouvements naturels du preset. La fin de la piste libère immédiatement la bouche, et les gestes continuent pendant la transition de sortie.
-- **Articulation de la bouche** : Les animations et le lipsync utilisent une ouverture proportionnelle à la largeur de la bouche, répartie entre les deux lèvres et les tissus voisins jusqu’au menton. Les commissures restent stables pendant l’ouverture et les lèvres s’arrondissent ensemble. L’intensité des expressions renforce les sourires sans amplifier la descente de la lèvre inférieure ni du menton.
+- **Articulation audio** : Le volume de la voix pilote une ouverture de mâchoire modérée et lissée sur le modèle Face Cap. Pendant la piste, les levées, pincements, étirements et arrondis des lèvres sont neutralisés pour éviter leur cumul avec le preset. Les sourires, les autres expressions et les mouvements de tête restent ceux du preset ; sans audio, la bouche enregistrée est restituée entièrement.
 - **Son sur le second écran** : La piste est aussi transmise par WebRTC. Sur le récepteur, cliquez sur **Activer le son** pour l’entendre.
 - **Catalogue fourni** : Cinq animations prédéfinies sans audio (clin d'œil, étonnement, hochement, regard pensif et sourcils froncés). Les anciennes performances parlées ont été retirées.
 - **Enregistrement simple sans audio** : Saisissez éventuellement un nom, démarrez la capture, puis arrêtez-la. La pose de tête et les expressions faciales sont ajoutées directement à la bibliothèque, sans microphone ni donnée Base64.
@@ -57,22 +66,17 @@ Dès le premier visage, puis au retour après au moins **3 secondes sans visage 
 ### 4. Diffusion WebRTC Pure vers Second Écran (`CanvasBroadcaster`)
 - **Flux Vidéo Brut sans Interface** : Sortie dédiée carrée `1080×1080` à 30 FPS, sans aucun bouton ni menu dans l'image transmise. Le cadrage utilise un recadrage central sans déformation ni bandes noires et reste indépendant de la taille de la fenêtre opérateur.
 - **Serveur de Signalement WebSocket Intégré** : Relais instantané d'offres/réponses SDP et candidats ICE via Vite.
-- **Interface Récepteur Plein Écran** : Page dédiée [`receiver.html`](./receiver.html) pour afficher le flux sur une seconde machine via le réseau local avec indicateur de connexion discret.
+- **Interface Récepteur Plein Écran** : Page dédiée [`receiver.html`](./receiver.html) pour afficher le flux sur une demi-seconde machine via le réseau local avec indicateur de connexion discret.
 
-### Affichage Buste 3D permanent
-- **Minimaliste** : Le bouton **⚪ Minimaliste** en bas affiche uniquement les 478 points blancs du FaceMesh sur fond noir, localement et dans la sortie WebRTC. L’image caméra, le buste, la texture, les yeux 3D et la cavité buccale sont masqués ; le suivi, la capture de référence et les animations restent actifs. Le buste est indisponible pendant ce mode et retrouve son état prévu à la désactivation. Ce mode peut servir pendant l’attente d’une image ComfyUI ; son activation et sa désactivation sont manuelles pour l’instant.
-- Le **Buste 3D** reste affich? en Live et en Autonome. La webcam alimente en arri?re-plan le suivi, les captures et la texture du visage ; son image compl?te est masqu?e dans le navigateur et en WebRTC. Le bouton Buste a ?t? retir?.
-- **Secours sans cliché** : Le mode autonome et les tests d’animations fonctionnent même avant toute capture. Sans cliché du visiteur actuel, un visage standard MediaPipe plein avec une texture générique anime le buste. La texture est alignée automatiquement sur les points du visage au démarrage pour rendre les yeux, le nez et la bouche lisibles par un logiciel qui analyse la sortie vidéo. Dès qu’un cliché est disponible, les prochaines activations utilisent sa texture. Une ancienne photo de visiteur n’est jamais utilisée pour ce secours. Si la texture ne charge pas, un visage plein reste affiché.
-- Le mode utilise `public/models/male_facemesh_zone_creusee.obj`.
-- Le panneau **FaceMesh** ajuste la position, la taille et les inclinaisons du visage sur le buste. **Save** m?morise les r?glages dans ce navigateur ; les r?glages de buste pr?c?dents sont conserv?s.
-- En mode autonome, la tête explore librement les deux côtés et varie son inclinaison, y compris pendant les presets ; les gestes des animations s’ajoutent à ce mouvement avec des transitions fluides.
-- Le cadrage reste identique en Live et en Autonome. Le retour au suivi du visiteur utilise une transition progressive ; les pertes de suivi de moins de 180 ms sont tol?r?es pour limiter les bascules intempestives.
-- Le buste suit la position, l??chelle et la rotation du visage en Live comme en Autonome, avec la m?me composition en WebRTC.
+### Affichage Face Cap
+Le rendu 3D Live et Autonome utilise le même modèle, ses mêmes yeux et ses mêmes dents.
+La source de texture est la webcam, le meilleur cliché mémorisé ou la photo de secours.
+Le mode **Minimaliste** affiche 478 points ronds blancs de 4 pixels sur fond noir. En Live, les positions viennent directement de MediaPipe, iris compris. En autonome, les points sont répartis sur l’avant du visage uniquement, avec une densité renforcée sur les contours des yeux et des lèvres pour mieux lire les expressions. Ils suivent les poses et expressions des presets, y compris le lipsync audio ; il ne s’agit alors pas d’une détection caméra. Les presets existants restent compatibles. Les changements de forme et de pose sont raccordés par un ease-in-out de 0,5 seconde dans les deux sens. Sans preset disponible, la dernière forme affichée est conservée. Tracking / Locked, zoom, limite de rotation et correction d’angle restent disponibles. Un seul bouton **Minimaliste** permet d’activer ou quitter cet affichage.
+La sortie opérateur et WebRTC utilise le même canvas, avec un cadrage carré pour OBS.
 
-### 5. Détecteur Biométrique de Nouveau Visiteur (`VisitorDetector`)
+### 5. Détecteur de nouvelle visite (`VisitorDetector`)
 - **ID de session visiteur** : Affiché en version courte en haut, à côté de `STATE`. Cliquez dessus pour copier l’ID complet, également disponible au survol, dans la console et dans les alertes WebRTC (`visitorId`). Il reste identique pendant la session et le mode autonome ; une nouvelle détection ou le bouton **Test visiteur** génère un nouvel ID aléatoire. Il ne constitue pas une identité permanente pour reconnaître une personne lors de visites ultérieures.
-- **Condition sine qua non d'absence** : Nécessite une perte de tracking préalable $\ge 1,5$ s pour éviter tout faux positif pendant qu'une personne est active devant la caméra.
-- **Double analyse morphométrique crânienne** : Écart géométrique crânien $\Delta_{\text{morph}} \ge 0.16$ et dissimilarité globale $\ge 0.20$ confirmée sur 6 images consécutives.
+- **Absence** : Une nouvelle visite commence au retour après le délai configuré (3 secondes par défaut). Aucune comparaison biométrique entre personnes.
 - **Tampon de Texture Frontale Idéale (`FaceTextureHistoryBuffer`)** : Retient automatiquement l'image où le visage était le plus net, frontal et centré (au moins 2 secondes avant la perte de suivi) pour servir de texture de référence.
 - **Capture dès l’alignement** : Le premier cliché qui passe les contrôles de cadrage, d’alignement, de stabilité, d’yeux ouverts et de bouche au repos est mémorisé immédiatement, sans attendre plusieurs images ou un score élevé. Il est remplacé dès qu’un meilleur candidat arrive. Au départ, le FaceMesh reprend une image déjà mémorisée, sans refaire de capture webcam.
 - **Axe du visage obligatoire** : Toutes les captures, y compris celles de secours, exigent une orientation connue à ±10° maximum horizontalement/verticalement et une inclinaison latérale à ±6° maximum. Sinon, la capture attend que le visage revienne dans l’axe.
@@ -97,16 +101,16 @@ prototype_v2/
 │   ├── animations/              # Fichiers d'animations .json (servis sous /animations/)
 │   │   └── preset_*.json
 │   ├── models/                  # Modèle MediaPipe FaceLandmarker Task
-│   └── wasm/                    # Binaires WebAssembly MediaPipe
+│   └── wasm/                    # MediaPipe et décodeur KTX2 Basis pour les yeux
 │
 └── src/
     ├── main.js                  # Chef d'orchestre de l'application & machine d'états
     │
     ├── core/
     │   ├── camera.js            # Capture vidéo webcam 720p 60 FPS
-    │   ├── tracker.js           # Détecteur MediaPipe FaceLandmarker avec lissage 1€
-    │   ├── renderer.js          # Rendu Three.js (Masque 3D, Stencil Yeux, Cavité Buccale)
-    │   ├── autonomousGazeEngine.js # Moteur de comportement, regard, VOR & clignements
+    │   ├── tracker.js           # Détecteur MediaPipe FaceLandmarker, sortie brute en Live
+    │   ├── renderer.js          # Face Cap, caméra fixe, webcam et texture photo
+    │   ├── autonomousGazeEngine.js # Lecture des presets manuels et maintien de pose
     │   ├── animationLibrary.js  # Gestionnaire de chargement / sauvegarde d'animations
     │   ├── visitorDetector.js   # Nouvelle visite au retour après absence
     │   ├── faceTextureHistoryBuffer.js # Tampon d'image frontale idéale sans obstruction
@@ -162,17 +166,17 @@ Les bundles optimisés pour `index.html` et `receiver.html` sont générés dans
 ### 1. Poste Opérateur Principal (`index.html`)
 - Ouvrez `http://localhost:5173/` sur l'ordinateur équipé de la caméra.
 - L'interface affiche le flux vidéo en direct avec le masque 3D superposé.
-- **Indicateur Animation** : Affiche le preset en cours ou « Regard autonome ». Un clic ouvre la bibliothèque, où le preset actif est surligné avec la mention « En cours ».
-- **Enregistrer un preset** : Donnez éventuellement un nom, cliquez sur `● Enregistrer un preset`, jouez le mouvement, puis cliquez sur `■ Arrêter et ajouter`. Le preset apparaît immédiatement dans la bibliothèque et ne contient aucun audio.
+- **Indicateur Animation** : Affiche le preset en cours ou « En attente de preset manuel ». Un clic ouvre la bibliothèque, où le preset actif est surligné avec la mention « En cours ».
+- **Enregistrer un preset** : Donnez éventuellement un nom, cliquez sur `● Enregistrer un preset`, jouez le mouvement, puis cliquez sur `■ Arrêter et ajouter`. Le preset conserve les expressions brutes, la rotation et la position 3D complète (matrice MediaPipe) sans audio. La lecture restitue les translations X/Y/Z et la distance, y compris pour les anciens presets enregistrés qui possèdent déjà ces coordonnées. Le choix Locked recentre le rendu dans tous les affichages sans modifier les données enregistrées.
 - **Bouton 🎬 BIBLIOTHÈQUE** : Ouvrez la fenêtre d'animations pour :
   - Tester immédiatement une animation (`▶ Tester`).
   - Télécharger son fichier JSON (`⬇`).
   - Importer un nouveau fichier `.json` (`📥 Importer`).
-  - Activer/Désactiver la lecture aléatoire à 50% en mode autonome.
+  - Activer/Désactiver la lecture des presets manuels en mode autonome.
 - **Sensibilité Visiteur** : Ajuste le seuil utilisé pour reconnaître l'arrivée d'une nouvelle personne.
 - **Indicateur WebRTC** : Affiche le statut de connexion du second écran (`WebRTC: En attente` ou `WebRTC: 1 ordi connecté`).
 - **Réglages ComfyUI** : Le bouton `⚙ ComfyUI` permet de saisir l'adresse de l'instance, choisir un JSON placé dans `comfyWorkflow/`, tester la connexion, exécuter le workflow immédiatement et activer son lancement automatique lors d'un nouveau visiteur.
-- **Align 3D — Save** : Mémorise la position X/Y, les trois angles et le zoom dans ce navigateur, puis les restaure au rechargement. Les ajustements restent temporaires jusqu’au clic sur **Save**, y compris **Tout réinitialiser** : cliquez sur **Save** après la remise à zéro pour la conserver.
+- **Webcam / Expressions** : Affichez la vidéo de fond ou inspectez les morph targets Face Cap. La caméra reste fixe.
 
 ### TouchDesigner : nouveau visiteur sur PC 2
 
@@ -216,7 +220,7 @@ L'envoi UDP ne confirme pas la réception par TouchDesigner.
 3. Dans l'application, ouvrez `⚙ ComfyUI`, entrez par exemple `http://192.168.1.50:8188`, choisissez le workflow et testez la connexion.
 4. Activez **Exécuter au nouveau visiteur**, puis enregistrez.
 
-Le serveur Photomaton transmet le workflow à `/prompt` uniquement lorsqu’un cliché FaceMesh du visiteur actuel est mémorisé, et au plus tôt une seconde après sa détection. Si la capture arrive plus tard, l’envoi attend cette capture. Une nouvelle détection remplace l’attente précédente. Le lancement manuel exige aussi un cliché mémorisé. Le workflow doit être autonome : aucune capture webcam n'est injectée automatiquement.
+Le serveur Photomaton transmet le workflow à `/prompt` uniquement lorsqu’un cliché FaceMesh du visiteur actuel est mémorisé, et au plus tôt une demi-seconde après sa détection. Si la capture arrive plus tard, l’envoi attend cette capture. Une nouvelle détection remplace l’attente précédente. Le lancement manuel exige aussi un cliché mémorisé. Le workflow doit être autonome : aucune capture webcam n'est injectée automatiquement.
 
 ---
 
@@ -235,6 +239,7 @@ Pour explorer les animations disponibles, leurs métadonnées et le schéma de d
 - **Projet** : Photomaton // Soft Photography (2025–2026)
 - **Institution** : ECAL (École cantonale d'art de Lausanne)
 - **Auteur** : Jamy Herrmann
+- **Modèle Face Cap** : [Face Cap / bannaflak](https://www.bannaflak.com/face-cap), distribué dans les exemples three.js.
 - **Technologies** : Three.js, MediaPipe Vision Tasks, Kokoro TTS ONNX, WebRTC, Vite.
 
 
@@ -248,3 +253,16 @@ Pour explorer les animations disponibles, leurs métadonnées et le schéma de d
 6. Sur l?ordinateur 2, dans TouchDesigner, cr?er un **NDI In TOP**, puis s?lectionner la source OBS dans **Source Name**. Utiliser de pr?f?rence Ethernet.
 
 Le transport entre l?application et la source Navigateur OBS reste WebRTC en local. L??mission NDI est faite par OBS/DistroAV ; l?application n??met pas directement de NDI. OBS, DistroAV et la r?ception TouchDesigner n?cessitent une v?rification sur les machines concern?es.
+
+
+### Vérification du rendu Face Cap
+
+```bash
+node --test src/core/faceCapRig.test.js
+npm run build
+```
+
+Avec le serveur Vite lancé, ouvrir `/fallback-check.html` pour vérifier le modèle,
+les textures originales des yeux, les expressions, le cliché mémorisé et le mode
+Autonome sur une image fixe, sans webcam. Le rapport doit afficher `webglError: 0`
+et `errors: []`.

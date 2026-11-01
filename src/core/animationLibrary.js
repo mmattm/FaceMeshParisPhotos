@@ -4,11 +4,11 @@
  * Manages saving, loading, listing, and streaming of facial mocap animations
  * stored in the dedicated `public/animations/` directory.
  * 
- * Automatically initializes preset performances (wink, smile, nod, surprise)
- * and provides random selection (~50% chance) for the autonomous mode.
+ * Plays only manually captured/imported metric performances in autonomous mode.
+ * An empty library stays empty; no generated movements are created.
  */
 
-import { generatePresetAnimations } from './presetAnimations.js';
+import { usesRecordedPosition } from './faceCapPreset.js';
 
 export class AnimationLibrary extends EventTarget {
   constructor() {
@@ -61,16 +61,6 @@ export class AnimationLibrary extends EventTarget {
     try {
       await this.refreshList();
 
-      // If no animations exist yet in the dedicated directory, auto-populate the presets!
-      if (this.animations.length === 0) {
-        console.log('[AnimationLibrary] Directory empty, populating built-in preset animations...');
-        const presets = generatePresetAnimations();
-        for (const preset of presets) {
-          await this.saveAnimation(preset.name, preset);
-        }
-        await this.refreshList();
-      }
-
       // Preload all animation JSON bodies into memory cache for zero-latency 60 FPS playback
       for (const item of this.animations) {
         const key = item.filename || item.id;
@@ -83,21 +73,6 @@ export class AnimationLibrary extends EventTarget {
       this.dispatchEvent(new CustomEvent('initialized', { detail: { count: this.animations.length } }));
     } catch (err) {
       console.warn('[AnimationLibrary] Init warning:', err);
-      // Fallback: load in-memory presets if server is unreachable
-      const presets = generatePresetAnimations();
-      for (const p of presets) {
-        this.cache.set(p.id, p);
-        this.cache.set(`${p.id}.json`, p);
-        this.animations.push({
-          id: p.id,
-          name: p.name,
-          filename: `${p.id}.json`,
-          durationMs: p.durationMs,
-          frameCount: p.frameCount,
-          createdAt: p.createdAt,
-          hasAudio: false
-        });
-      }
       this.isInitialized = true;
     }
     return this.animations;
@@ -261,36 +236,17 @@ export class AnimationLibrary extends EventTarget {
    * Synchronously returns a random cached animation for zero-latency 60 FPS loop
    */
   getRandomAnimationSync() {
-    if (!this.animations || this.animations.length === 0) {
-      // Fallback: check cache directly
-      if (this.cache.size > 0) {
-        const values = Array.from(this.cache.values());
-        return values[Math.floor(Math.random() * values.length)];
-      }
-      return null;
+    // Only captured/imported metric performances participate in automatic playback.
+    let candidates = this.animations.map(item => this.cache.get(item.filename) || this.cache.get(item.id))
+      .filter(animation => animation?.frames?.length && animation.durationMs > 0 && usesRecordedPosition(animation));
+    if (candidates.length > 1) {
+      const alternatives = candidates.filter(animation => animation.id !== this.lastPlayedId);
+      if (alternatives.length) candidates = alternatives;
     }
-
-    let candidates = this.animations;
-    if (this.animations.length > 1 && this.lastPlayedId) {
-      candidates = this.animations.filter(a => a.id !== this.lastPlayedId && a.filename !== this.lastPlayedId);
-    }
-    if (candidates.length === 0) candidates = this.animations;
-
-    const chosenMeta = candidates[Math.floor(Math.random() * candidates.length)];
-    if (!chosenMeta) return null;
-
-    this.lastPlayedId = chosenMeta.id;
-    const cached = this.cache.get(chosenMeta.filename) || this.cache.get(chosenMeta.id);
-    if (cached) {
-      return cached;
-    }
-
-    // If not yet cached, trigger background load and return any cached one
-    this.getAnimationData(chosenMeta.filename || chosenMeta.id);
-    if (this.cache.size > 0) {
-      return Array.from(this.cache.values())[0];
-    }
-    return null;
+    if (!candidates.length) return null;
+    const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+    this.lastPlayedId = chosen.id;
+    return chosen;
   }
 
   getActiveAnimationCount() {
