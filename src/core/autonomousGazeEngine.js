@@ -444,7 +444,7 @@ export class AutonomousGazeEngine extends EventTarget {
     const initialSide = Math.sign(initYaw) || (Math.random() > 0.5 ? 1 : -1);
     this.currentHead = {
       pitch: initPitch,
-      yaw: Math.max(-MAX_AUTONOMOUS_YAW, Math.min(MAX_AUTONOMOUS_YAW, initYaw)),
+      yaw: Math.max(-(this.rotationLimits?.maxYaw ?? MAX_AUTONOMOUS_YAW), Math.min(this.rotationLimits?.maxYaw ?? MAX_AUTONOMOUS_YAW, initYaw)),
       roll: initRoll
     };
     this.targetHead = { pitch: -3, yaw: initialSide * 18, roll: -initialSide * 2 };
@@ -1269,10 +1269,10 @@ export class AutonomousGazeEngine extends EventTarget {
 
     // Explore with the head and eyes from a fixed viewpoint. A small pitch
     // keeps up/down looks readable without exposing an exaggerated underside.
-    const effPitch = Math.max(-8, Math.min(8,
+    const effPitch = Math.max(-(this.rotationLimits?.maxPitch ?? 8), Math.min(this.rotationLimits?.maxPitch ?? 8,
       this.currentHead.pitch * 0.28 + (breathPitch + rotWigglePitch) * swayFade));
-    const effYaw = Math.max(-MAX_AUTONOMOUS_YAW,
-      Math.min(MAX_AUTONOMOUS_YAW, this.currentHead.yaw + rotWiggleYaw * swayFade));
+    const effYaw = Math.max(-(this.rotationLimits?.maxYaw ?? MAX_AUTONOMOUS_YAW),
+      Math.min(this.rotationLimits?.maxYaw ?? MAX_AUTONOMOUS_YAW, this.currentHead.yaw + rotWiggleYaw * swayFade));
     const effRoll = this.currentHead.roll + (breathRoll + rotWiggleRoll) * swayFade;
 
     // Autonomous gaze rotates in place, as a person facing a static webcam.
@@ -1439,7 +1439,7 @@ export class AutonomousGazeEngine extends EventTarget {
 
       // Play gestures on top of the moving autonomous pose, within safe bounds.
       targetPitch = Math.max(-35, Math.min(35, effPitch + targetPitch));
-      targetYaw = Math.max(-MAX_AUTONOMOUS_YAW, Math.min(MAX_AUTONOMOUS_YAW, effYaw + targetYaw));
+      targetYaw = Math.max(-(this.rotationLimits?.maxYaw ?? MAX_AUTONOMOUS_YAW), Math.min(this.rotationLimits?.maxYaw ?? MAX_AUTONOMOUS_YAW, effYaw + targetYaw));
       targetRoll = Math.max(-28, Math.min(28, effRoll + targetRoll));
       targetTransX = Math.max(-0.12, Math.min(0.12, targetTransX)) * AUTONOMOUS_LATERAL_TRANSLATION_SCALE;
       targetTransY = Math.max(-0.12, Math.min(0.12, targetTransY)) * AUTONOMOUS_LATERAL_TRANSLATION_SCALE;
@@ -1698,6 +1698,11 @@ export class AutonomousGazeEngine extends EventTarget {
       y: 0.5 + finalTransY,
       z: 0.0 - finalTransZ
     };
+
+    const maxYaw = this.rotationLimits?.maxYaw ?? 42;
+    const maxPitch = this.rotationLimits?.maxPitch ?? 8;
+    finalYaw = Math.max(-maxYaw, Math.min(maxYaw, finalYaw));
+    finalPitch = Math.max(-maxPitch, Math.min(maxPitch, finalPitch));
 
     // Rotation matrix for head pose (screen space aligned)
     this.eulerHelper.set(

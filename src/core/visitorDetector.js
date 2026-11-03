@@ -14,12 +14,18 @@ export class VisitorDetector extends EventTarget {
   reset() {
     this.hasVisitor = false;
     this.absentSince = null;
+    this.absenceNotified = false;
   }
 
   update(tracking, now = performance.now()) {
     const isPresent = Boolean(tracking?.detected && tracking.landmarks?.length);
     if (!isPresent) {
       if (this.hasVisitor && this.absentSince === null) this.absentSince = now;
+      if (this.absentSince !== null && !this.absenceNotified
+        && now - this.absentSince >= this.absenceMs) {
+        this.absenceNotified = true;
+        this.dispatchEvent(new CustomEvent('absence-complete'));
+      }
       return { isPresent: false, isNewVisitor: false };
     }
     const absenceDuration = this.absentSince === null ? 0 : now - this.absentSince;
@@ -27,6 +33,7 @@ export class VisitorDetector extends EventTarget {
     const reason = this.hasVisitor ? 'RETURN_AFTER_ABSENCE' : 'INITIAL_VISITOR';
     this.hasVisitor = true;
     this.absentSince = null;
+    this.absenceNotified = false;
     if (isNewVisitor) {
       this.dispatchEvent(new CustomEvent('new-visitor', {
         detail: { reason, absenceDuration }

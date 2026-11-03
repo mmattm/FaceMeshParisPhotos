@@ -171,7 +171,7 @@ export class PresetAudioLipSync {
       // Emphasize speech while keeping the mouth closed during silence.
       const energy = Math.max(0, Math.min(1, (rms - 0.008) / this.peak));
       const activation = Math.max(0, (energy - 0.14) / 0.86);
-      target = activation * activation * (3 - 2 * activation) * 0.45;
+      target = activation * activation * (3 - 2 * activation) * 0.34;
       const band = (from, to) => {
         const hzPerBin = this.context.sampleRate / this.analyser.fftSize;
         const first = Math.max(0, Math.floor(from / hzPerBin));

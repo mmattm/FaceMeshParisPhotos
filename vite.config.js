@@ -4,6 +4,7 @@ import { WebSocketServer } from 'ws';
 import { KokoroTTS } from 'kokoro-js';
 import { encodeWAV } from './src/tts/wavEncoder.js';
 import { audioLibraryPlugin } from './src/server/audioLibraryPlugin.js';
+import { alignmentSettingsPlugin } from './src/server/alignmentSettingsPlugin.js';
 import { randomizeComfySeeds } from './src/server/comfySeeds.js';
 import { uploadComfyVisitorImage } from './src/server/comfyVisitorImage.js';
 import { normalizePeerAddress, sendNewVisitorOsc } from './src/server/visitorOsc.js';
@@ -537,7 +538,7 @@ function comfyUiServerPlugin() {
 }
 
 export default defineConfig({
-  plugins: [ttsServerPlugin(), animationsServerPlugin(), webrtcSignalingPlugin(), comfyUiServerPlugin(), audioLibraryPlugin()],
+  plugins: [ttsServerPlugin(), animationsServerPlugin(), webrtcSignalingPlugin(), comfyUiServerPlugin(), audioLibraryPlugin(), alignmentSettingsPlugin()],
   server: {
     port: 5173,
     host: true

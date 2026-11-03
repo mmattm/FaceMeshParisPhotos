@@ -294,6 +294,33 @@
           </div>
         </div>
 
+        <div class="align-section">
+<div class="align-section-header"><span class="align-section-title">Rotation max de la t&#234;te (Autonome)</span></div>
+<div class="align-control-row">
+<label for="slider-cam-maxYaw" class="align-label">Gauche / Droite</label>
+<input type="range" id="slider-cam-maxYaw" class="blend-slider align-slider" min="0" max="90" step="1" value="42">
+<span id="val-cam-maxYaw" class="align-val">42&deg;</span>
+<button class="align-btn-reset" data-axis="maxYaw" title="R&#233;initialiser la limite">&#8634;</button>
+</div>
+<div class="align-control-row">
+<label for="slider-cam-maxPitch" class="align-label">Haut / Bas</label>
+<input type="range" id="slider-cam-maxPitch" class="blend-slider align-slider" min="0" max="45" step="1" value="8">
+<span id="val-cam-maxPitch" class="align-val">8&deg;</span>
+<button class="align-btn-reset" data-axis="maxPitch" title="R&#233;initialiser la limite">&#8634;</button>
+</div>
+</div>
+
+        <div class="align-section">
+          <div class="align-section-header"><span class="align-section-title">Yeux (Autonome)</span></div>
+          <div class="align-control-row">
+            <label for="slider-cam-eyeOpening" class="align-label">Ouverture</label>
+            <input type="range" id="slider-cam-eyeOpening" class="blend-slider align-slider" min="0" max="120" step="1" value="100" aria-describedby="eye-opening-help">
+            <span id="val-cam-eyeOpening" class="align-val">100%</span>
+            <button class="align-btn-reset" data-axis="eyeOpening" title="R&#233;initialiser l'ouverture des yeux">&#8634;</button>
+          </div>
+          <p id="eye-opening-help">0% : ferm&#233;s &middot; 100% : ouverture actuelle</p>
+        </div>
+
         <!-- Zoom / Échelle -->
         <div class="align-section">
           <div class="align-section-header">
@@ -435,6 +462,11 @@
         <button id="btn-toggle-face-texture" class="tool-btn" type="button" aria-pressed="true" disabled
           title="Basculer entre la texture webcam et le cliché FaceMesh pendant le suivi Live">
           Texture : FaceMesh
+        </button>
+
+        <button id="btn-test-fallback" class="tool-btn" type="button" aria-pressed="false"
+          title="Tester le visage fallback en mode autonome, sans effacer le clich&#233; FaceMesh">
+          Test fallback
         </button>
 
         <button id="btn-toggle-autonomous" class="tool-btn" disabled

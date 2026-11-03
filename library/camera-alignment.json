@@ -1,0 +1,21 @@
+{
+  "live": {
+    "x": 0,
+    "y": 0,
+    "pitch": 0,
+    "yaw": 0,
+    "roll": 0,
+    "zoom": 1
+  },
+  "autonomous_bust": {
+    "x": 0,
+    "y": -180,
+    "pitch": 13.5,
+    "yaw": 0,
+    "roll": 0,
+    "zoom": 1.8,
+    "maxYaw": 32,
+    "maxPitch": 8,
+    "eyeOpening": 75
+  }
+}

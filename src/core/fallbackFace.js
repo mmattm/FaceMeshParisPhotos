@@ -7,7 +7,9 @@ export function createFallbackFaceLandmarks(aspectRatio = 16 / 9) {
     .map(line => line.trim().split(/\s+/).slice(1).map(Number));
   const minY = Math.min(...vertices.map(point => point[1]));
   const maxY = Math.max(...vertices.map(point => point[1]));
-  const scale = 0.48 / (maxY - minY);
+  // Leave room for the full bust at the shared Align 3D zoom (100%).
+  // Once live tracking has run, the renderer reuses its exact bust transform.
+  const scale = 0.28 / (maxY - minY);
   const centerY = (minY + maxY) / 2;
   const landmarks = vertices.map(([x, y, z]) => ({
     x: 0.5 + x * scale / aspectRatio,

@@ -208,11 +208,15 @@ export class FaceTextureHistoryBuffer extends EventTarget {
     const lEyeOpen = lms[374] && lms[386] ? Math.abs(lms[374].y - lms[386].y) : 0;
     const avgEyeOpen = (rEyeOpen + lEyeOpen) * 0.5;
     const diffEyeOpen = Math.abs(rEyeOpen - lEyeOpen);
-
-    if (avgEyeOpen < 0.010 || diffEyeOpen > 0.007) {
+    // Scale the open-eye threshold with the face instead of requiring a fixed
+    // image-space aperture, which rejects smaller faces and naturally narrow eyes.
+    const minEyeOpen = Math.max(0.003, Math.min(0.008, faceHeight * 0.018));
+    const maxEyeDifference = Math.max(0.004, faceHeight * 0.018);
+    if (Math.min(rEyeOpen, lEyeOpen) < minEyeOpen || diffEyeOpen > maxEyeDifference) {
       return null; // Blinking or winking
     }
-    const eyeScore = Math.min(1.0, (avgEyeOpen - 0.009) / 0.012) * Math.max(0, 1.0 - (diffEyeOpen / 0.007));
+    const eyeScore = Math.min(1.0, avgEyeOpen / (minEyeOpen * 2))
+      * Math.max(0, 1.0 - (diffEyeOpen / maxEyeDifference));
 
     // 7. BOUCHE AU REPOS (mouth resting, lips closed)
     const mouthOpen = lms[13] && lms[14] ? Math.abs(lms[13].y - lms[14].y) : 0;
@@ -406,7 +410,14 @@ export class FaceTextureHistoryBuffer extends EventTarget {
     for (let i = 0; i < this.recentMotionHistory.length; i++) {
       sumMotion += this.recentMotionHistory[i];
     }
-    const avgMotionBefore = sumMotion / this.recentMotionHistory.length;
+    const wellAligned = Math.abs(pose.yaw) <= 5 && Math.abs(pose.pitch) <= 5
+      && Math.abs(pose.roll) <= 3;
+    // Once a frontal visitor settles, use the latest two frames so movement
+    // while getting into position does not postpone an otherwise clean capture.
+    const motionWindow = wellAligned ? this.recentMotionHistory.slice(-2) : this.recentMotionHistory;
+    const avgMotionBefore = wellAligned
+      ? motionWindow.reduce((sum, value) => sum + value, 0) / motionWindow.length
+      : sumMotion / this.recentMotionHistory.length;
 
     // 3. Pristine Quality Evaluation
     const aspectRatio = (videoEl.videoWidth || 1280) / Math.max(1, videoEl.videoHeight || 720);
