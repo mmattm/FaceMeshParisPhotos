@@ -321,6 +321,17 @@
           <p id="eye-opening-help">0% : ferm&#233;s &middot; 100% : ouverture actuelle</p>
         </div>
 
+        <div class="align-section">
+          <div class="align-section-header"><span class="align-section-title">Bouche automatique (Audio)</span></div>
+          <div class="align-control-row">
+            <label for="slider-cam-audioMouthOpening" class="align-label">Ouverture</label>
+            <input type="range" id="slider-cam-audioMouthOpening" class="blend-slider align-slider" min="0" max="200" step="1" value="100" aria-describedby="audio-mouth-opening-help">
+            <span id="val-cam-audioMouthOpening" class="align-val">100%</span>
+            <button class="align-btn-reset" data-axis="audioMouthOpening" title="R&#233;initialiser l'ouverture de la bouche">&#8634;</button>
+          </div>
+          <p id="audio-mouth-opening-help">Pendant la lecture audio : 0% d&#233;sactive l'ouverture, 100% conserve l'amplitude actuelle.</p>
+        </div>
+
         <!-- Zoom / Échelle -->
         <div class="align-section">
           <div class="align-section-header">
@@ -328,7 +339,7 @@
           </div>
           <div class="align-control-row">
             <span class="align-label">Zoom</span>
-            <input type="range" id="slider-cam-zoom" class="blend-slider align-slider" min="50" max="180" step="1"
+            <input type="range" id="slider-cam-zoom" class="blend-slider align-slider" min="50" max="200" step="1"
               value="100">
             <span id="val-cam-zoom" class="align-val">100%</span>
             <button class="align-btn-reset" data-axis="zoom" title="Réinitialiser Zoom">↺</button>
@@ -475,6 +486,11 @@
         </button>
 
         <div class="divider-vert"></div>
+
+        <button id="btn-toggle-webcam-only" class="tool-btn" type="button" aria-pressed="false"
+          title="Afficher uniquement la webcam, sans FaceMesh ni buste">
+          Webcam seule
+        </button>
 
         <button id="btn-toggle-minimalist" class="tool-btn" type="button" aria-pressed="false"
           title="Points blancs du FaceMesh sur fond noir, sans image caméra ni buste, également en WebRTC">

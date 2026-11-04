@@ -14,12 +14,14 @@ export async function uploadComfyVisitorImage(prompt, imageDataUrl, comfyFetch, 
   }
   const form = new FormData();
   form.append('image', new Blob([bytes], { type: 'image/jpeg' }), `visitor_${randomUUID()}.jpg`);
-  form.append('type', 'input');
+  form.append('type', 'temp');
   form.append('overwrite', 'false');
   const response = await comfyFetch(`${baseUrl}/upload/image`, { method: 'POST', body: form });
   if (!response.ok) throw new Error(`Échec de l’envoi du cliché à ComfyUI : HTTP ${response.status}`);
   const uploaded = await response.json();
   if (!uploaded.name || typeof uploaded.name !== 'string') throw new Error('ComfyUI ne renvoie pas le nom du cliché envoyé.');
-  target.inputs.image = uploaded.subfolder ? `${uploaded.subfolder}/${uploaded.name}` : uploaded.name;
+  const imagePath = uploaded.subfolder ? `${uploaded.subfolder}/${uploaded.name}` : uploaded.name;
+  // LoadImage defaults to input; the annotation resolves this upload in temp instead.
+  target.inputs.image = `${imagePath} [temp]`;
   return target.inputs.image;
 }

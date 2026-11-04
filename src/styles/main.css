@@ -140,6 +140,17 @@ body.interface-hidden .stage-container {
 
 .minimalist-mode .stage-container { background: #000000; }
 
+.webcam-only-mode #webcam-video {
+  opacity: 1 !important;
+  pointer-events: none !important;
+  filter: none;
+  transform: scaleX(var(--webcam-only-mirror, -1)) !important;
+}
+
+.webcam-only-mode #output-canvas {
+  visibility: hidden;
+}
+
 .show-texture #webcam-video {
   filter: none;
 }

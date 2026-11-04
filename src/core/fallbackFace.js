@@ -2,8 +2,11 @@
 // https://github.com/google-ai-edge/mediapipe/blob/master/mediapipe/modules/face_geometry/data/canonical_face_model.obj
 import canonicalFaceObj from './canonicalFaceModel.obj?raw';
 
-export function createFallbackFaceLandmarks(aspectRatio = 16 / 9) {
-  const vertices = canonicalFaceObj.split(/\r?\n/).filter(line => line.startsWith('v '))
+export function createFallbackFaceLandmarks(aspectRatio = 16 / 9, referenceLandmarks = null, referenceAspectRatio = 1) {
+  const hasReference = referenceLandmarks?.length >= 468;
+  const vertices = hasReference
+    ? referenceLandmarks.map(p => [(p.x - 0.5) * referenceAspectRatio, -p.y, -(p.z || 0) * referenceAspectRatio])
+    : canonicalFaceObj.split(/\r?\n/).filter(line => line.startsWith('v '))
     .map(line => line.trim().split(/\s+/).slice(1).map(Number));
   const minY = Math.min(...vertices.map(point => point[1]));
   const maxY = Math.max(...vertices.map(point => point[1]));
@@ -11,12 +14,15 @@ export function createFallbackFaceLandmarks(aspectRatio = 16 / 9) {
   // Once live tracking has run, the renderer reuses its exact bust transform.
   const scale = 0.28 / (maxY - minY);
   const centerY = (minY + maxY) / 2;
+  const centerX = hasReference
+    ? (Math.min(...vertices.map(p => p[0])) + Math.max(...vertices.map(p => p[0]))) / 2 : 0;
   const landmarks = vertices.map(([x, y, z]) => ({
-    x: 0.5 + x * scale / aspectRatio,
+    x: 0.5 + (x - centerX) * scale / aspectRatio,
     y: 0.48 - (y - centerY) * scale,
     z: -z * scale / aspectRatio,
     visibility: 1
   }));
+  if (landmarks.length >= 478) return landmarks;
   // FaceLandmarker adds five iris points per eye to the 468-vertex model.
   for (const [left, right] of [[33, 133], [362, 263]]) {
     const a = landmarks[left], b = landmarks[right];

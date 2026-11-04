@@ -1389,7 +1389,7 @@ export class AutonomousGazeEngine extends EventTarget {
     }
 
     const animationPoseBlendshapes = animSample?.blendshapes;
-    const audioMouth = this.presetAudio.getBlendshapes();
+    const audioMouth = this.presetAudio.getBlendshapes(this.rotationLimits?.audioMouthOpening ?? 100);
     if (audioMouth && animSample) {
       animSample = { ...animSample, blendshapes: { ...animSample.blendshapes, ...audioMouth } };
     }

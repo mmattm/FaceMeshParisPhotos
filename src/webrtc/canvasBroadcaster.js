@@ -89,6 +89,13 @@ export class CanvasBroadcaster extends EventTarget {
     this.broadcastCtx.fillStyle = '#000000';
     this.broadcastCtx.fillRect(0, 0, this.outputWidth, this.outputHeight);
 
+    if (this.webcamOnlyMode) {
+      if (this.videoElement?.readyState >= 2) {
+        this.drawVideoCover(this.videoElement, offsetX, offsetY, drawWidth, drawHeight);
+      }
+      return;
+    }
+
     // In LIVE mode the webcam is an HTML element behind the transparent WebGL
     // canvas, so rebuild that same composition inside the captured canvas.
     if (!this.canvasIncludesVideo && this.liveBackgroundEnabled && this.videoElement?.readyState >= 2) {

@@ -1,7 +1,8 @@
 // MediaPipe encodes approach/recession mostly as landmark scale, even with an
 // orthographic camera. Normalize around the nose root and preserve camera UVs.
+import { createFallbackFaceLandmarks } from './fallbackFace.js';
+
 export function lockLiveDepth(frame, reference, aspectRatio = 16 / 9) {
-  if (frame.isAutonomous) return frame;
   const pose = frame.poseLandmarks || frame.landmarks;
   const anchor = pose?.[168];
   const distance = (a, b) => a && b ? Math.hypot(
@@ -10,7 +11,11 @@ export function lockLiveDepth(frame, reference, aspectRatio = 16 / 9) {
   const size = distance(pose?.[10], pose?.[152]) * 0.68
     + distance(pose?.[234], pose?.[454]) * 0.32;
   if (!anchor || !Number.isFinite(size) || size < 0.001) return frame;
-  reference.size ??= size;
+  if (!reference.size) {
+    const canonical = createFallbackFaceLandmarks(aspectRatio);
+    reference.size = distance(canonical[10], canonical[152]) * 0.68
+      + distance(canonical[234], canonical[454]) * 0.32;
+  }
   reference.z ??= anchor.z || 0;
   const scale = reference.size / size;
   const normalize = points => points?.map(point => point && ({

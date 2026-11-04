@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
+import { createFallbackFaceLandmarks } from './fallbackFace.js';
 
 const MODEL_URLS = {
   female: '/models/female.obj',
@@ -169,6 +170,15 @@ export class BustOverlayModel {
     // Slightly oversized sculptural support so the photo mask sits inside the
     // cranium instead of visually exceeding its silhouette.
     this.targetScale = (heightScale * 0.68 + widthScale * 0.32) * 1.10;
+    // The sculpture has one display size, independent of the visitor's face
+    // proportions. Keep targetScale measured for alignFacePose's mask fitting.
+    this.referenceLandmarks ??= createFallbackFaceLandmarks(1);
+    const referenceDistance = (a, b) => {
+      const p = this.referenceLandmarks[a], q = this.referenceLandmarks[b];
+      return Math.hypot(p.x - q.x, p.y - q.y, (p.z - q.z) * 1.10) * renderH;
+    };
+    const displayScale = (referenceDistance(10, 152) / refHeight * 0.68
+      + referenceDistance(234, 454) / refWidth * 0.32) * 1.10;
 
     const eyeCenter = new THREE.Vector3().addVectors(eyeA, eyeB).multiplyScalar(0.5);
     const eyeDistance = eyeA.distanceTo(eyeB);
@@ -182,12 +192,12 @@ export class BustOverlayModel {
     if (!this.hasPose) {
       this.currentPosition.copy(this.targetPosition);
       this.currentQuaternion.copy(this.targetQuaternion);
-      this.currentScale = this.targetScale;
+      this.currentScale = displayScale;
       this.hasPose = true;
     } else {
       this.currentPosition.lerp(this.targetPosition, 0.55);
       this.currentQuaternion.slerp(this.targetQuaternion, 0.55);
-      this.currentScale += (this.targetScale - this.currentScale) * 0.55;
+      this.currentScale = displayScale;
     }
 
     this.root.position.copy(this.currentPosition);

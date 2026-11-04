@@ -319,7 +319,11 @@ class App {
     this.setBustMode();
 
     document.getElementById('btn-toggle-minimalist')?.addEventListener('click', () => {
+      this.setWebcamOnlyMode(false);
       this.setMinimalistMode(!this.minimalistMode);
+    });
+    document.getElementById('btn-toggle-webcam-only')?.addEventListener('click', () => {
+      this.setWebcamOnlyMode(!this.webcamOnlyMode);
     });
 
     document.getElementById('btn-debug-new-visitor')?.addEventListener('click', () => {
@@ -554,7 +558,7 @@ class App {
 
     this.isAlignModeActive = false;
 
-    const offset = { x: 0, y: 0, pitch: 0, yaw: 0, roll: 0, zoom: 1.0, maxYaw: 42, maxPitch: 8, eyeOpening: 100 };
+    const offset = { x: 0, y: 0, pitch: 0, yaw: 0, roll: 0, zoom: 1.0, maxYaw: 42, maxPitch: 8, eyeOpening: 100, audioMouthOpening: 100 };
     const profiles = new CameraAlignmentProfiles(this.renderer, localStorage, this.projectAlignmentSettings);
 
     const updateSaveStatus = () => {
@@ -580,11 +584,11 @@ class App {
 
     const updateUIFromState = () => {
       const cur = this.renderer.getCameraOffset();
-      for (const key of ['maxYaw', 'maxPitch', 'eyeOpening']) {
+      for (const key of ['maxYaw', 'maxPitch', 'eyeOpening', 'audioMouthOpening']) {
         const slider = document.getElementById('slider-cam-' + key);
         const label = document.getElementById('val-cam-' + key);
         if (slider) slider.value = cur[key];
-        if (label) label.textContent = cur[key] + (key === 'eyeOpening' ? '%' : '\u00b0');
+        if (label) label.textContent = cur[key] + (['eyeOpening', 'audioMouthOpening'].includes(key) ? '%' : '\u00b0');
       }
       if (sliderCamX) sliderCamX.value = cur.x;
       if (valCamX) valCamX.textContent = `${Math.round(cur.x)}px`;
@@ -693,7 +697,7 @@ class App {
       });
     }
 
-    for (const key of ['maxYaw', 'maxPitch', 'eyeOpening']) {
+    for (const key of ['maxYaw', 'maxPitch', 'eyeOpening', 'audioMouthOpening']) {
       document.getElementById('slider-cam-' + key)?.addEventListener('input', event => {
         this.renderer.setCameraOffset({ [key]: Number(event.target.value) });
         updateUIFromState();
@@ -713,6 +717,7 @@ class App {
         else if (axis === 'maxYaw') cur.maxYaw = 42;
         else if (axis === 'maxPitch') cur.maxPitch = 8;
         else if (axis === 'eyeOpening') cur.eyeOpening = 100;
+        else if (axis === 'audioMouthOpening') cur.audioMouthOpening = 100;
         this.renderer.setCameraOffset(cur);
         updateUIFromState();
         updateSaveStatus();
@@ -800,7 +805,7 @@ class App {
         e.preventDefault();
         const cur = this.renderer.getCameraOffset();
         const zoomDelta = e.deltaY > 0 ? -0.05 : 0.05;
-        const newZoom = Math.max(0.5, Math.min(1.8, Number((cur.zoom + zoomDelta).toFixed(2))));
+        const newZoom = Math.max(0.5, Math.min(2.0, Number((cur.zoom + zoomDelta).toFixed(2))));
         this.renderer.setCameraOffset({ zoom: newZoom });
         updateUIFromState();
         updateSaveStatus();
@@ -1163,10 +1168,17 @@ class App {
 
   async queueComfyWorkflow(settings, visitorGeneration = false) {
     const callId = ++this.comfyCallId;
-    const minimalistToken = visitorGeneration ? this.beginComfyMinimalistJob() : null;
+    let minimalistToken = null;
     this.showNotification('Appel à ComfyUI…', 'running', 0, 'comfy-call');
     try {
       const visitorImage = this.captureComfyWebcamImage();
+      if (visitorGeneration) {
+        // Capture while the booth is lit, before the minimalist transition
+        // sends /newVisitor to the lighting controller.
+        await new Promise(resolve => setTimeout(resolve, 200));
+        if (callId !== this.comfyCallId) return { superseded: true };
+        minimalistToken = this.beginComfyMinimalistJob();
+      }
       const response = await fetch('/api/comfy/queue', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1691,7 +1703,8 @@ class App {
     if (!this.canUseAutonomous()) return false;
     if (this.forceFallbackFace) {
       const { renderW, renderH } = this.renderer.getVideoMetrics();
-      this.fallbackFaceLandmarks = createFallbackFaceLandmarks(renderW / Math.max(1, renderH));
+      this.fallbackFaceLandmarks = createFallbackFaceLandmarks(renderW / Math.max(1, renderH),
+        this.renderer.fallbackTextureLandmarks, this.renderer.fallbackTextureAspectRatio);
       this.renderer.setAutonomousFallback(true);
       this.autonomousEngine.setBaseLandmarks(this.fallbackFaceLandmarks);
       return true;
@@ -1713,7 +1726,8 @@ class App {
       return true;
     }
     const { renderW, renderH } = this.renderer.getVideoMetrics();
-    this.fallbackFaceLandmarks = createFallbackFaceLandmarks(renderW / Math.max(1, renderH));
+    this.fallbackFaceLandmarks = createFallbackFaceLandmarks(renderW / Math.max(1, renderH),
+      this.renderer.fallbackTextureLandmarks, this.renderer.fallbackTextureAspectRatio);
     this.renderer.setAutonomousFallback(true);
     this.autonomousEngine.setBaseLandmarks(this.fallbackFaceLandmarks);
     return true;
@@ -1866,6 +1880,18 @@ class App {
 
   updateBroadcastBackground() {
     this.canvasBroadcaster?.setLiveBackgroundEnabled(false);
+  }
+
+  setWebcamOnlyMode(enabled) {
+    this.webcamOnlyMode = !!enabled;
+    document.body.classList.toggle('webcam-only-mode', this.webcamOnlyMode);
+    const button = document.getElementById('btn-toggle-webcam-only');
+    button?.classList.toggle('active', this.webcamOnlyMode);
+    button?.setAttribute('aria-pressed', String(this.webcamOnlyMode));
+    if (this.canvasBroadcaster) {
+      this.canvasBroadcaster.webcamOnlyMode = this.webcamOnlyMode;
+      this.canvasBroadcaster.drawBroadcastFrame();
+    }
   }
 
   setMinimalistMode(enabled) {

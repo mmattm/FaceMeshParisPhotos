@@ -75,7 +75,7 @@ export class FaceMeshRenderer {
       pitch: 0,
       yaw: 0,
       roll: 0,
-      zoom: 1.0, maxYaw: 42, maxPitch: 8, eyeOpening: 100
+      zoom: 1.0, maxYaw: 42, maxPitch: 8, eyeOpening: 100, audioMouthOpening: 100
     };
 
     this.camera = new THREE.OrthographicCamera(
@@ -871,7 +871,7 @@ if (uDepartureMix < 1.0) {
 
 
   setCameraOffset(offset = {}) {
-    for (const [key, max] of [['maxYaw', 90], ['maxPitch', 45], ['eyeOpening', 120]]) {
+    for (const [key, max] of [['maxYaw', 90], ['maxPitch', 45], ['eyeOpening', 120], ['audioMouthOpening', 200]]) {
       if (Number.isFinite(offset[key])) this.cameraOffset[key] = Math.max(0, Math.min(max, offset[key]));
     }
     if (offset.x !== undefined) this.cameraOffset.x = Number(offset.x) || 0;
@@ -888,7 +888,7 @@ if (uDepartureMix < 1.0) {
   }
 
   resetCameraOffset() {
-    this.cameraOffset = { x: 0, y: 0, pitch: 0, yaw: 0, roll: 0, zoom: 1.0, maxYaw: 42, maxPitch: 8, eyeOpening: 100 };
+    this.cameraOffset = { x: 0, y: 0, pitch: 0, yaw: 0, roll: 0, zoom: 1.0, maxYaw: 42, maxPitch: 8, eyeOpening: 100, audioMouthOpening: 100 };
     this.updateCameraTransform();
     return { ...this.cameraOffset };
   }
@@ -937,6 +937,7 @@ if (uDepartureMix < 1.0) {
     if (!this.videoElement) return;
     const { x, y, pitch, yaw, roll, zoom } = this.cameraOffset;
     const mirror = this.isMirrored ? -1 : 1;
+    this.videoElement.style.setProperty('--webcam-only-mirror', mirror);
 
     // Matching 3D camera viewpoint in exact direction and sense:
     // x: horizontal translation
@@ -1161,13 +1162,14 @@ if (uDepartureMix < 1.0) {
 
   async loadFallbackFaceTexture(tracker) {
     const image = new Image();
-    image.src = '/models/fallback-face-v1.png';
+    image.src = '/models/fallback-face-v5-soft-eyes-thin-lips.png';
     await image.decode();
     const landmarks = tracker.detectReferenceLandmarks(image);
     if (!landmarks || landmarks.length < 468) {
       throw new Error('Le visage de secours ne peut pas être aligné sur le FaceMesh.');
     }
     this.fallbackTextureLandmarks = landmarks.map(point => ({ ...point }));
+    this.fallbackTextureAspectRatio = image.naturalWidth / image.naturalHeight;
     const texture = new THREE.Texture(image);
     texture.colorSpace = THREE.SRGBColorSpace;
     texture.needsUpdate = true;
@@ -1788,7 +1790,6 @@ if (uDepartureMix < 1.0) {
         // alignFacePose below applies this same correction to its face mesh.
         bustRoot.position.copy(this.lastLiveBustPose.position);
         // Keep the animated orientation supplied by bustOverlay.update().
-        bustRoot.scale.copy(this.lastLiveBustPose.scale);
       }
     }
     this.updateFaceMeshAlignment(trackingResult.poseLandmarks, renderW, renderH, depthScale);

@@ -146,7 +146,7 @@ export class PresetAudioLipSync {
     return Math.max(0, (this.context.currentTime - this.startedAt) * 1000);
   }
 
-  getBlendshapes() {
+  getBlendshapes(openingPercent = 100) {
     // Release the mouth to the preset as soon as the track is no longer playing.
     if (!this.durationMs || !this.source || this.context.state !== 'running' || this.elapsedMs >= this.durationMs) {
       this.jaw = 0;
@@ -192,21 +192,23 @@ export class PresetAudioLipSync {
     if (target === 0 && this.jaw < 0.0005) this.jaw = this.jawTarget = 0;
     this.rounded += (rounded - this.rounded) * (1 - Math.exp(-dt / 0.035));
     this.spread += (spread - this.spread) * (1 - Math.exp(-dt / 0.035));
-    const opening = Math.min(1, this.jaw / 0.06);
+    const gain = Number.isFinite(openingPercent) ? Math.max(0, Math.min(200, openingPercent)) / 100 : 1;
+    const jaw = this.jaw * gain;
+    const opening = Math.min(1, jaw / 0.06);
     const openingEase = opening * opening * (3 - 2 * opening);
-    const upperLift = this.jaw * (0.20 + this.spread * 0.10);
+    const upperLift = jaw * (0.20 + this.spread * 0.10);
     return {
       _audioArticulation: 1,
-      jawOpen: this.jaw,
+      jawOpen: jaw,
       mouthClose: 1 - openingEase * 0.85,
       mouthUpperUpLeft: upperLift,
       mouthUpperUpRight: upperLift,
-      mouthLowerDownLeft: this.jaw * 0.25,
-      mouthLowerDownRight: this.jaw * 0.25,
-      mouthStretchLeft: this.jaw * this.spread * 0.55,
-      mouthStretchRight: this.jaw * this.spread * 0.55,
-      mouthFunnel: this.jaw * this.rounded * 0.25,
-      mouthPucker: this.jaw * this.rounded * 0.55
+      mouthLowerDownLeft: jaw * 0.25,
+      mouthLowerDownRight: jaw * 0.25,
+      mouthStretchLeft: jaw * this.spread * 0.55,
+      mouthStretchRight: jaw * this.spread * 0.55,
+      mouthFunnel: jaw * this.rounded * 0.25,
+      mouthPucker: jaw * this.rounded * 0.55
     };
   }
 }
