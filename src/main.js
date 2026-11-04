@@ -14,6 +14,8 @@ import { AutonomousGazeEngine } from './core/autonomousGazeEngine.js';
 import { FaceTextureHistoryBuffer } from './core/faceTextureHistoryBuffer.js';
 import { AnimationLibrary } from './core/animationLibrary.js';
 import { VisitorDetector } from './core/visitorDetector.js';
+import { VisitorIdentity } from './core/visitorIdentity.js';
+import { FaceRecognition } from './core/faceRecognition.js';
 import { isFaceInsideOutput, getDepartureBlend } from './core/outputFaceBounds.js';
 import { createFallbackFaceLandmarks } from './core/fallbackFace.js';
 import { CanvasBroadcaster } from './webrtc/canvasBroadcaster.js';
@@ -53,7 +55,33 @@ class App {
     this.visitorDetector = new VisitorDetector({
       absenceMs: savedVisitorAbsence === null ? 3000 : Number(savedVisitorAbsence)
     });
-    this.visitorDetector.addEventListener('new-visitor', (e) => this.handleNewVisitor(e.detail));
+    const recognition = new FaceRecognition();
+    this.visitorIdentity = new VisitorIdentity({
+      describe: (video, tracking) => recognition.describe(video, tracking),
+      onNewVisitor: detail => {
+        if (detail.reason !== 'MANUAL_REFERENCE') this.handleNewVisitor(detail);
+      },
+      onStatus: (status, distance, error) => {
+        const button = document.getElementById('btn-visitor-identity');
+        const labels = { checking: 'comparaison…', ready: 'active', same: 'même visiteur',
+          new: 'nouveau confirmé', uncertain: 'à confirmer', error: 'indisponible', disabled: 'désactivée' };
+        if (button) {
+          button.textContent = `Reconnaissance : ${labels[status]}`;
+          button.classList.toggle('active', this.visitorIdentity.enabled);
+          button.setAttribute('aria-pressed', String(this.visitorIdentity.enabled));
+          button.title = distance == null ? 'Comparer au dernier visiteur, uniquement en mémoire'
+            : `Distance visage : ${distance.toFixed(3)} (identique ≤ 0.50 ; différent ≥ 0.62)`;
+        }
+        if (error) {
+          console.error('[VisitorIdentity]', error);
+          this.showNotification('Reconnaissance indisponible : désactivez-la pour utiliser la détection par absence.',
+            'error', 5000, 'visitor-identity');
+        }
+      }
+    });
+    this.visitorDetector.addEventListener('new-visitor', (e) => {
+      if (!this.isVisitorDetectionBlocked()) this.visitorIdentity.request(e.detail);
+    });
     this.visitorDetector.addEventListener('absence-complete', () => {
       this.showNotification('Absence terminée · prêt pour le prochain visiteur', 'success', 3500, 'visitor-absence');
     });
@@ -325,6 +353,9 @@ class App {
     document.getElementById('btn-toggle-webcam-only')?.addEventListener('click', () => {
       this.setWebcamOnlyMode(!this.webcamOnlyMode);
     });
+    document.getElementById('btn-visitor-identity')?.addEventListener('click', () => {
+      this.visitorIdentity.setEnabled(!this.visitorIdentity.enabled);
+    });
 
     document.getElementById('btn-debug-new-visitor')?.addEventListener('click', () => {
       if (this.isVisitorDetectionBlocked()) {
@@ -333,7 +364,9 @@ class App {
       }
       // Let live tracking collect a fresh visitor image during the test.
       if (this.forceAutonomousMode) btnAutonomous?.click();
+      this.visitorIdentity.reset();
       this.handleNewVisitor({ reason: 'DEBUG_TRIGGER' });
+      this.visitorIdentity.request({ reason: 'MANUAL_REFERENCE' });
       this.showNotification('Nouveau visiteur simulé', '', 2200, 'visitor-debug');
     });
 
@@ -1510,6 +1543,9 @@ class App {
       // Use the same visible zone for live rendering and the absence timer.
       // Forcing autonomous playback alone must not count as a visitor leaving.
       this.visitorDetector.update(isVisitorInFrame ? rawTracking : null, now);
+      if (!this.isVisitorDetectionBlocked()) {
+        void this.visitorIdentity.observe(isVisitorInFrame ? rawTracking : null, this.videoEl, now);
+      }
       this.updateAutonomousAvailability();
 
       if (isFacePresent) {
