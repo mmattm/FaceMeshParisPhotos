@@ -24,10 +24,14 @@ function loadModel() {
 }
 
 export class FaceRecognition {
-  async describe(video, tracking) {
+  constructor({ onCrop = () => {} } = {}) {
+    this.onCrop = onCrop;
+  }
+
+  capturePortrait(video, tracking, { forComparison = false } = {}) {
     const pose = tracking.headPose || {};
-    if (Math.abs(pose.yaw || 0) > 20 || Math.abs(pose.pitch || 0) > 18
-      || video.readyState < 2) return null;
+    if (video.readyState < 2 || (forComparison
+      && (Math.abs(pose.yaw || 0) > 20 || Math.abs(pose.pitch || 0) > 18))) return null;
     const landmarks = tracking.rawLandmarks || tracking.landmarks;
     if (!landmarks?.[454]) return null;
     const width = video.videoWidth, height = video.videoHeight;
@@ -54,7 +58,12 @@ export class FaceRecognition {
     ctx.scale(scale, scale);
     ctx.translate(-(eyes[0].x + eyes[1].x) / 2, -(eyes[0].y + eyes[1].y) / 2);
     ctx.drawImage(video, 0, 0);
+    this.onCrop(canvas);
+    return canvas;
+  }
+
+  async describePortrait(portrait) {
     const api = await loadModel();
-    return api.computeFaceDescriptor(canvas);
+    return api.computeFaceDescriptor(portrait);
   }
 }

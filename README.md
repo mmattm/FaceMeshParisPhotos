@@ -19,7 +19,7 @@ Le système capture en direct les expressions faciales, les micro-mouvements et 
 
 Lorsque personne n'est détecté, ou en transition subtile, le masque entre en **Mode Autonome** : il explore l'espace avec des micro-saccades oculaires naturelles, un réflexe vestibulo-oculaire (VOR), des clignements anatomiques complets et joue les cinq animations prédéfinies sans audio du catalogue fourni.
 
-Dès le premier visage, puis au retour après au moins **3 secondes sans visage détecté**, une nouvelle visite démarre, même si la même personne revient. Le délai est réglable de 1 à 10 secondes avec **Absence visiteur**. Aucune comparaison de visages n'est effectuée. Le système met à jour sa référence faciale, signale l'événement au récepteur **WebRTC** et peut lancer automatiquement un workflow **ComfyUI**. Sortir du carré de sortie ou forcer le mode autonome ne compte pas comme une absence tant que la webcam détecte encore le visage.
+La reconnaissance compare le portrait webcam présent au portrait du dernier visiteur avec **face-api.js**. Le premier portrait exploitable démarre une visite ; un portrait différent en démarre immédiatement une nouvelle, tandis qu'un visage identique conserve sa session. Le système avertit le récepteur **WebRTC** et peut lancer **ComfyUI**. Le bouton **Réglages** contient le seuil de comparaison et le reset après absence (60 secondes par défaut, 0 pour le désactiver). Les portraits restent uniquement en mémoire du navigateur. Si la reconnaissance est désactivée, un retour après 3 secondes d'absence démarre une nouvelle visite ; ce délai est réglable de 1 à 10 secondes. Sortir du carré de sortie ou forcer le mode autonome ne compte pas comme une absence tant que le visage est détecté et suffisamment proche.
 
 ---
 
@@ -60,6 +60,8 @@ Dès le premier visage, puis au retour après au moins **3 secondes sans visage 
 - **Interface Récepteur Plein Écran** : Page dédiée [`receiver.html`](./receiver.html) pour afficher le flux sur une seconde machine via le réseau local avec indicateur de connexion discret.
 
 ### Affichage Buste 3D permanent
+
+Le fallback suit les mouvements du visiteur tant que son visage est détecté. Le portrait webcam live apparaît par un fondu de 1,1 seconde lorsque le visage dépasse le seuil **Visage minimum**, est centré et de face pendant 450 ms. Dans **Réglages**, **Calibrer ma position pour le live** mémorise le centre et l'orientation du visage à la position souhaitée, et règle Visage minimum à environ 90 % de la taille mesurée pour tolérer les petits mouvements. Cette calibration est conservée dans le navigateur. L'aperçu webcam affiche la taille du visage et la raison qui bloque le live. Une sortie de la zone ramène progressivement le fallback, avec une petite tolérance aux variations du suivi. Les deux apparences restent animées pendant le fondu ; si la personne quitte complètement l'image, le dernier rendu live est conservé pour terminer la transition. En l'absence de visiteur, le fallback reprend son animation autonome. Le seuil Visage minimum reste commun au suivi et à la présence des visiteurs.
 - **Minimaliste** : Le bouton **⚪ Minimaliste** en bas affiche uniquement les 478 points blancs du FaceMesh sur fond noir, localement et dans la sortie WebRTC. L’image caméra, le buste, la texture, les yeux 3D et la cavité buccale sont masqués ; le suivi, la capture de référence et les animations restent actifs. Le buste est indisponible pendant ce mode et retrouve son état prévu à la désactivation. Ce mode peut servir pendant l’attente d’une image ComfyUI ; son activation et sa désactivation sont manuelles pour l’instant.
 - Le **Buste 3D** reste affich? en Live et en Autonome. La webcam alimente en arri?re-plan le suivi, les captures et la texture du visage ; son image compl?te est masqu?e dans le navigateur et en WebRTC. Le bouton Buste a ?t? retir?.
 - **Secours sans cliché** : Le mode autonome et les tests d’animations fonctionnent même avant toute capture. Sans cliché du visiteur actuel, un visage standard MediaPipe plein avec une texture générique anime le buste. La texture est alignée automatiquement sur les points du visage au démarrage pour rendre les yeux, le nez et la bouche lisibles par un logiciel qui analyse la sortie vidéo. Dès qu’un cliché est disponible, les prochaines activations utilisent sa texture. Une ancienne photo de visiteur n’est jamais utilisée pour ce secours. Si la texture ne charge pas, un visage plein reste affiché.
@@ -69,10 +71,13 @@ Dès le premier visage, puis au retour après au moins **3 secondes sans visage 
 - Le cadrage reste identique en Live et en Autonome. Le retour au suivi du visiteur utilise une transition progressive ; les pertes de suivi de moins de 180 ms sont tol?r?es pour limiter les bascules intempestives.
 - Le buste suit la position, l??chelle et la rotation du visage en Live comme en Autonome, avec la m?me composition en WebRTC.
 
-### 5. Détecteur Biométrique de Nouveau Visiteur (`VisitorDetector`)
+### 5. Comparaison du dernier visiteur (`VisitorIdentity`)
+
+La comparaison est réarmée après au moins **1 seconde sans visage accepté**. Une seule comparaison réussie décide de l'arrivée ; tant que le visiteur reste présent, sa session est conservée sans nouvelle comparaison. Cela évite qu'une expression ou une grimace relance ComfyUI. Deux personnes qui se remplacent doivent laisser brièvement le cadre vide entre elles. Le reset après 60 secondes et le bouton Test visiteur permettent toujours de démarrer une nouvelle visite.
 - **ID de session visiteur** : Affiché en version courte en haut, à côté de `STATE`. Cliquez dessus pour copier l’ID complet, également disponible au survol, dans la console et dans les alertes WebRTC (`visitorId`). Il reste identique pendant la session et le mode autonome ; une nouvelle détection ou le bouton **Test visiteur** génère un nouvel ID aléatoire. Il ne constitue pas une identité permanente pour reconnaître une personne lors de visites ultérieures.
-- **Condition sine qua non d'absence** : Nécessite une perte de tracking préalable $\ge 1,5$ s pour éviter tout faux positif pendant qu'une personne est active devant la caméra.
-- **Double analyse morphométrique crânienne** : Écart géométrique crânien $\Delta_{\text{morph}} \ge 0.16$ et dissimilarité globale $\ge 0.20$ confirmée sur 6 images consécutives.
+- **Un portrait de référence** : MediaPipe localise le visage dans la webcam. face-api.js calcule son empreinte sur un portrait aligné de 150 × 150 pixels. Le portrait et son empreinte remplacent la référence uniquement lors d'une nouvelle visite.
+- **Une comparaison directe** : Distance euclidienne au portrait précédent, avec un seul seuil réglable (0,42 par défaut). Une distance supérieure déclenche immédiatement une nouvelle visite, sans votes ni délai de confirmation. Les comparaisons sont espacées de 400 ms et suspendues pendant le rendu minimaliste. Une image inexploitable attend le prochain cadrage valide.
+- **Réglages mémorisés** : Seuil, taille minimale du visage et reset après absence sont sauvegardés dans le navigateur. Les deux portraits comparés sont visibles dans Réglages. Le reset oublie la référence après 60 secondes d'absence continue ; le prochain visage démarre alors une nouvelle visite.
 - **Tampon de Texture Frontale Idéale (`FaceTextureHistoryBuffer`)** : Retient automatiquement l'image où le visage était le plus net, frontal et centré (au moins 2 secondes avant la perte de suivi) pour servir de texture de référence.
 - **Capture dès l’alignement** : Le premier cliché qui passe les contrôles de cadrage, d’alignement, de stabilité, d’yeux ouverts et de bouche au repos est mémorisé immédiatement, sans attendre plusieurs images ou un score élevé. Il est remplacé dès qu’un meilleur candidat arrive. Au départ, le FaceMesh reprend une image déjà mémorisée, sans refaire de capture webcam.
 - **Axe du visage obligatoire** : Toutes les captures, y compris celles de secours, exigent une orientation connue à ±10° maximum horizontalement/verticalement et une inclinaison latérale à ±6° maximum. Sinon, la capture attend que le visage revienne dans l’axe.
@@ -140,6 +145,13 @@ npm install
 ```
 
 ### 2. Lancement du serveur de développement
+
+Double-cliquer sur **demarrer-photomaton.bat** (ou placer un raccourci vers ce fichier dans le dossier de démarrage Windows) : le lanceur exécute `npm run dev` sur le port fixe `5173` et ouvre `http://localhost:5173/` dans une nouvelle fenêtre Chrome, avec le profil habituel. Vite ouvre la page dès que le serveur est prêt. Chrome continue le rendu lorsque sa fenêtre est derrière OBS. Dans OBS, utiliser une source **Navigateur** avec l'URL `http://127.0.0.1:5173/receiver.html?output=obs`. Si OBS a démarré avant le serveur et affiche une page noire, actualiser cette source une fois Chrome prêt. Si le port est déjà occupé, le lanceur affiche une erreur au lieu de passer sur un autre port : garder une seule instance du serveur. Garder la console ouverte pendant l'utilisation ; **Ctrl+C** arrête le serveur.
+
+La webcam est surveillée chaque seconde et reconnectée si le flux se coupe ou se fige. Un contrôle indépendant toutes les 5 secondes recharge la page si aucune image vidéo ne revient pendant 30 secondes, après la fin du rendu minimaliste éventuel. Les rechargements sont espacés d'au moins 2 minutes grâce à la mémoire de session. Une absence de visiteur ne déclenche pas de rechargement ; une permission webcam refusée demande une intervention dans Chrome.
+
+Pour lancer uniquement le serveur :
+
 ```bash
 npm run dev
 ```
@@ -169,7 +181,7 @@ Les bundles optimisés pour `index.html` et `receiver.html` sont générés dans
   - Télécharger son fichier JSON (`⬇`).
   - Importer un nouveau fichier `.json` (`📥 Importer`).
   - Activer/Désactiver la lecture aléatoire à 50% en mode autonome.
-- **Sensibilité Visiteur** : Ajuste le seuil utilisé pour reconnaître l'arrivée d'une nouvelle personne.
+- **Réglages** : Expressions, absence sans reconnaissance, taille minimale du visage, reset après absence et seuil de comparaison. Baisser le seuil rend la reconnaissance du même visiteur plus stricte, avec un risque de nouvelles visites pour une même personne.
 - **Indicateur WebRTC** : Affiche le statut de connexion du second écran (`WebRTC: En attente` ou `WebRTC: 1 ordi connecté`).
 - **Réglages ComfyUI** : Le bouton `⚙ ComfyUI` permet de saisir l'adresse de l'instance, choisir un JSON placé dans `comfyWorkflow/`, tester la connexion, exécuter le workflow immédiatement et activer son lancement automatique lors d'un nouveau visiteur.
 - **Align 3D — Save** : Mémorise la position X/Y, les trois angles et le zoom dans ce navigateur, puis les restaure au rechargement. Les ajustements restent temporaires jusqu’au clic sur **Save**, y compris **Tout réinitialiser** : cliquez sur **Save** après la remise à zéro pour la conserver.

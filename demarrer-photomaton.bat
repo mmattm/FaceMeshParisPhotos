@@ -1,4 +1,4 @@
 @echo off
 cd /d "%~dp0"
-call npm run dev -- --port 5173 --strictPort --open
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\demarrer-photomaton.ps1" %*
 pause

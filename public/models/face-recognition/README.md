@@ -1,48 +1,32 @@
-# Experimental last-visitor comparison
+# Last-visitor portrait comparison
 
-Model: face-api.js 0.22.2 faceRecognitionNet (128-value face descriptors).
-Source: https://github.com/justadudewhohacks/face-api.js/tree/0.22.2/weights
-Library: `/vendor/face-api.min.js`; MIT license in `/vendor/face-api.LICENSE`.
-The upstream README credits the recognition weights to Davis King (dlib).
+Uses the locally served face-api.js 0.22.2 faceRecognitionNet and its 128-value descriptors.
+MediaPipe locates the face; an aligned 150 x 150 webcam portrait is passed to computeFaceDescriptor.
+Only the last accepted portrait and its descriptor remain in browser memory.
+Without a previous portrait, the first usable webcam capture starts a visit immediately,
+including after the absence reset. It does not wait for the recognition model or require
+the frontal pose used for comparisons. The reference descriptor is computed lazily when
+another portrait needs comparing. A stalled inference times out after 12 seconds and
+reports an error before retrying; it cannot leave recognition permanently busy.
+After at least one second without an accepted face, the returning portrait is compared
+directly to that reference using Euclidean distance. During continuous presence the
+visitor session stays locked: expressions and movements do not trigger more visits.
+Two people replacing each other must leave the camera without an accepted face for
+one second to rearm comparison. Manual new-visitor and reset controls still rearm it.
+Distance at or below the configurable threshold (default 0.42) keeps the visitor session.
+A greater distance immediately starts a new visit and replaces the reference portrait.
+There are no votes, uncertainty bands or confirmation delays. Each arrival has one
+successful comparison; unusable images retry at most once per 400 ms, with one inference
+in flight. No recognition model runs again while the same visit remains present.
+Tracking loss, reset and disabling invalidate in-flight results. Recognition remains paused
+during an active minimalist generation. A continuous absence of 60 seconds forgets the
+reference by default; this timeout can be changed or disabled in Settings.
+Settings displays the reference portrait and the most recently analyzed portrait side by side.
+Reloading clears the portraits. No recognition portrait is written to disk or sent to a service.
+The separate ComfyUI visitor-image upload still occurs when a new visit launches a workflow.
 
-All library/model files are served locally. No face image or descriptor is sent
-to a recognition service or saved by this experiment. The existing ComfyUI webcam
-upload remains part of a confirmed new visit.
+Model source: https://github.com/justadudewhohacks/face-api.js/tree/0.22.2/weights
+Documentation: https://justadudewhohacks.github.io/face-api.js/docs/index.html
+Library license: /vendor/face-api.LICENSE
 
-Whenever a face is visible, independently of the absence timer, MediaPipe supplies a
-frontal, sufficiently large face. Its eyes align a 150 x 150 crop. The descriptor
-is computed on CPU at most once per 400 ms, with one inference in flight. Three
-consistent samples are required. Only the last accepted visitor's three
-descriptors remain in memory; refreshing the page clears them.
-After each confirmed comparison, monitoring pauses for two seconds before
-checking again. This also detects a person replacing another without leaving
-an empty frame. Comparisons remain suspended during an active visitor generation.
-
-Euclidean distance <= 0.50 confirms the same visitor; >= 0.62 confirms a different
-visitor. The interval between thresholds waits for further evidence. These are
-experimental thresholds and must be checked under the booth's actual lighting.
-Unclear, profile, small or failed inputs do not trigger OSC or ComfyUI.
-
-The Recognition button shows the decision and toggles back to absence-only
-detection. The existing manual new-visitor button bypasses recognition and
-refreshes the reference when possible. A returning identical visitor receives
-one notification after at least 500 ms out of frame; further comparisons during
-the same continuous presence do not repeat it. Recognition itself does not wait
-for this notification debounce or the configured absence delay.
-
-Timing: identity confirmation, then the existing one-second wait, webcam capture,
-200 ms wait, minimalist transition /newVisitor OSC, and ComfyUI submission.
-Manual minimalist and manual OSC controls retain their existing behavior.
-
-Checks: `node --test src/core/visitorIdentity.test.js` and `npm run build`.
-Booth checks: initial visitor triggers once; same person returns after >3 seconds
-without new workflow/OSC; another person triggers once; uncertain/profile face
-waits; recognition toggle restores absence-only behavior; reload forgets identity.
-
-Browser smoke check (headless Chrome, CPU, November 2026): local model loaded,
-finite 128-value descriptors, about 250–300 ms per warm inference. Distances:
-fallback v1/v5 0.289; two different photos of the same public demo subject 0.394;
-two distinct demo subjects 0.654. Demo portraits came from
-https://github.com/ageitgey/face_recognition/tree/master/examples and were used
-only as temporary test inputs, not shipped with this application. These fixture
-results do not establish accuracy under the booth's lighting.
+Validation: node --test src/core/visitorIdentity.test.js; npm run build.

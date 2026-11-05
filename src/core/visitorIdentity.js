@@ -1,21 +1,25 @@
-// Compare only with the last accepted visitor. Descriptors stay in memory.
+// Keep one portrait and its face descriptor for the last accepted visitor.
 export const descriptorDistance = (a, b) => Math.hypot(...a.map((v, i) => v - b[i]));
 
 export class VisitorIdentity {
-  constructor({ describe, onNewVisitor, onStatus = () => {}, onSameVisitor = () => {}, intervalMs = 400,
-    monitorMs = 2000, newVisitorMs = 2000, uncertainVisitorMs = 4000, comparisonTimeoutMs = 8000,
-    sameThreshold = 0.5, differentThreshold = 0.62, confirmations = 3, absenceResetMs = 60000 }) {
-    Object.assign(this, { describe, onNewVisitor, onStatus, onSameVisitor, intervalMs, monitorMs,
-      newVisitorMs, uncertainVisitorMs, comparisonTimeoutMs,
-      sameThreshold, differentThreshold, confirmations });
+  constructor({ capture, describe, onNewVisitor, onStatus = () => {}, onSameVisitor = () => {},
+    onReference = () => {}, intervalMs = 400, sameThreshold = 0.42, absenceResetMs = 60000,
+    inferenceTimeoutMs = 12000 }) {
+    Object.assign(this, { capture, describe, onNewVisitor, onStatus, onSameVisitor, onReference, intervalMs, inferenceTimeoutMs });
     this.enabled = true;
     this.reference = null;
     this.pending = null;
     this.version = 0;
     this.busy = false;
-    this.nextSampleAt = 0;
     this.sameReported = false;
     this.absentSince = null;
+    this.nextSampleAt = 0;
+    this.arrivalPending = true;
+    this.lastDistance = null;
+    this.status = 'waiting';
+    const reportStatus = this.onStatus;
+    this.onStatus = (status, ...args) => { this.status = status; reportStatus(status, ...args); };
+    this.setSameThreshold(sameThreshold);
     this.setAbsenceResetMs(absenceResetMs);
   }
 
@@ -25,12 +29,22 @@ export class VisitorIdentity {
       ? Math.max(0, Math.min(600000, duration)) : 60000;
   }
 
+  setSameThreshold(value) {
+    const threshold = Number(value);
+    this.sameThreshold = Number.isFinite(threshold)
+      ? Math.max(0.25, Math.min(0.5, threshold)) : 0.42;
+    this.version++;
+    this.pending = null;
+    this.nextSampleAt = 0;
+    this.arrivalPending = true;
+  }
+
   request(detail) {
     this.version++;
     if (!this.enabled) return this.onNewVisitor(detail);
-    this.pending = { detail, samples: [], votes: [] };
+    this.pending = detail;
     this.nextSampleAt = 0;
-    if (!this.reference || !this.sameReported) this.onStatus('checking');
+    this.arrivalPending = true;
   }
 
   setEnabled(enabled) {
@@ -38,122 +52,130 @@ export class VisitorIdentity {
     this.version++;
     this.pending = null;
     this.nextSampleAt = 0;
+    this.arrivalPending = true;
     this.onStatus(enabled ? 'ready' : 'disabled');
   }
 
-  // A manual new-visitor trigger must never retain the previous identity.
   reset() {
     this.version++;
-    this.pending = null;
+    this.busy = false;
     this.reference = null;
+    this.pending = null;
     this.sameReported = false;
     this.nextSampleAt = 0;
+    this.arrivalPending = true;
+    this.lastDistance = null;
+    this.onReference(null);
   }
 
-  async observe(tracking, video, now) {
+  async describeWithTimeout(portrait) {
+    let timer;
+    try {
+      const descriptor = await Promise.race([
+        Promise.resolve().then(() => this.describe(portrait)),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Analyse du visage trop longue : nouvelle tentative dans 5 s.')), this.inferenceTimeoutMs);
+        })
+      ]);
+      if (!descriptor?.length || !Array.from(descriptor).every(Number.isFinite)) {
+        throw new Error('Empreinte du visage invalide');
+      }
+      return Array.from(descriptor);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async observe(tracking, video, now, { paused = false } = {}) {
     if (tracking?.trackingHeld) return;
-    // Also check on return in case no observations ran during the absence.
     if (this.absenceResetMs > 0 && this.absentSince !== null
-      && now - this.absentSince >= this.absenceResetMs
-      && (this.reference || this.pending)) {
+      && now - this.absentSince >= this.absenceResetMs && this.reference) {
       this.reset();
+      this.pending = { reason: 'RETURN_AFTER_RESET' };
     }
     if (!tracking?.detected) {
+      this.absentSince ??= now;
+      this.sameReported = false;
+      this.version++; // Reject an image captured before departure.
+      this.nextSampleAt = 0;
       if (this.enabled) this.onStatus(tracking?.tooFar ? 'tooFar'
         : tracking?.proximityPending ? 'stabilizing' : 'waiting');
-      this.absentSince ??= now;
-      if (now - this.absentSince >= 500) this.sameReported = false;
-      // Reject inference results captured before a departure, including a brief one.
-      this.version++;
-      if (this.pending) {
-        this.pending.samples = [];
-        this.pending.votes = [];
-        this.pending.candidateSince = null;
-        this.pending.lastSampleAt = null;
-        this.pending.evidenceSince = null;
-      }
       return;
     }
-    this.absentSince = null;
-    // Inspect a continuous presence periodically too: a face can change without
-    // any absence. Wait between confirmed checks to limit CPU use.
-    if (this.enabled && !this.pending && !this.busy && now >= this.nextSampleAt) {
-      this.request({ reason: this.reference ? 'IDENTITY_CHECK' : 'INITIAL_VISITOR' });
+    const absenceDuration = this.absentSince === null ? 0 : now - this.absentSince;
+    if (absenceDuration >= 1000) {
+      this.arrivalPending = true;
+      this.pending ??= { reason: 'RETURN_AFTER_ABSENCE', absenceDuration };
     }
-    if (!this.enabled || !this.pending || this.busy
-      || tracking.isNewFrame === false || now < this.nextSampleAt) return;
-    this.busy = true;
+    this.absentSince = null;
+    // Rendering pauses comparisons, never the camera's presence/absence clock.
+    if (paused) {
+      this.version++;
+      if (this.enabled) this.onStatus('paused');
+      return;
+    }
+    if (!this.enabled) return;
+    // A continuous visit stays locked. Expressions cannot create repeated visits.
+    if (!this.arrivalPending) {
+      if (this.status !== 'active') this.onStatus('active', this.lastDistance);
+      return;
+    }
+    if (this.busy || tracking.isNewFrame === false || now < this.nextSampleAt) return;
+    const operation = {};
+    this.busy = operation;
     const version = this.version;
-    const pending = this.pending;
+    const detail = this.pending || { reason: this.reference ? 'IDENTITY_CHECK' : 'INITIAL_VISITOR' };
     this.nextSampleAt = now + this.intervalMs;
     try {
-      const descriptor = await this.describe(video, tracking);
-      if (version !== this.version || pending !== this.pending) return;
-      if (!descriptor) {
+      const portrait = this.capture(video, tracking, { forComparison: !!this.reference });
+      if (!portrait) {
         this.onStatus('position');
         return;
       }
-      if (!descriptor.length || !Array.from(descriptor).every(Number.isFinite)) return;
-      const sample = Array.from(descriptor);
-      if (pending.lastSampleAt != null && now - pending.lastSampleAt > 1200) {
-        pending.samples = [];
-        pending.votes = [];
-        pending.candidateSince = null;
-        pending.evidenceSince = null;
-      }
-      pending.lastSampleAt = now;
-      const previous = pending.samples.at(-1);
-      if (previous && descriptorDistance(previous, sample) > this.sameThreshold) {
-        pending.samples = [];
-        pending.votes = [];
-        pending.candidateSince = null;
-        pending.evidenceSince = null;
-      }
-      pending.evidenceSince ??= now;
-      pending.samples.push(sample);
-      pending.samples = pending.samples.slice(-this.confirmations);
-      const distance = this.reference
-        ? Math.min(...this.reference.map(ref => descriptorDistance(ref, sample))) : null;
-      const vote = distance === null ? 'new'
-        : distance <= this.sameThreshold ? 'same'
-          : distance >= this.differentThreshold ? 'new' : 'uncertain';
-      if (vote === 'same') pending.candidateSince = null;
-      else pending.candidateSince ??= now;
-      pending.votes.push(vote);
-      pending.votes = pending.votes.slice(-this.confirmations);
-      if (pending.votes.length < this.confirmations) return;
-      if (pending.votes.every(v => v === 'same')) {
+      // With no previous visitor, there is nothing to compare. Start immediately.
+      if (!this.reference) {
+        this.reference = { descriptor: null, portrait };
+        this.arrivalPending = false;
+        this.lastDistance = null;
         this.pending = null;
-        this.nextSampleAt = now + this.monitorMs;
+        this.sameReported = true;
+        this.onReference(portrait);
+        this.onStatus('new', null);
+        this.onNewVisitor({ ...detail, identityConfirmed: false, identityDistance: null });
+        return;
+      }
+      this.onStatus('checking');
+      const reference = this.reference;
+      if (!reference.descriptor) reference.descriptor = await this.describeWithTimeout(reference.portrait);
+      if (version !== this.version) return;
+      const descriptor = await this.describeWithTimeout(portrait);
+      if (version !== this.version) return;
+      if (descriptor.length !== reference.descriptor.length) {
+        throw new Error('Incompatible face descriptors');
+      }
+      const distance = descriptorDistance(reference.descriptor, descriptor);
+      this.lastDistance = distance;
+      this.arrivalPending = false;
+      this.pending = null;
+      if (distance !== null && distance <= this.sameThreshold) {
         this.onStatus('same', distance);
         if (!this.sameReported) this.onSameVisitor(distance);
         this.sameReported = true;
-      } else {
-        const uncertain = !pending.votes.every(v => v === 'new');
-        const waitMs = uncertain ? this.uncertainVisitorMs : this.newVisitorMs;
-        const timedOut = now - pending.evidenceSince >= this.comparisonTimeoutMs;
-        if (!timedOut && (pending.votes.includes('same') || pending.candidateSince == null
-          || now - pending.candidateSince < waitMs)) {
-          this.onStatus(uncertain ? 'uncertain' : 'checking', distance);
-          return;
-        }
-        this.reference = pending.samples.map(s => s.slice());
-        this.pending = null;
-        this.nextSampleAt = now + this.monitorMs;
-        // Report the first subsequent match too, even without a departure.
-        this.sameReported = false;
-        this.onStatus('new', distance);
-        this.onNewVisitor({ ...pending.detail, identityConfirmed: true, identityDistance: distance,
-          identityUncertain: !pending.votes.every(v => v === 'new') });
+        return;
       }
+      // One usable different portrait immediately becomes the new reference.
+      this.reference = { descriptor, portrait };
+      this.sameReported = true;
+      this.onReference(portrait);
+      this.onStatus('new', distance);
+      this.onNewVisitor({ ...detail, identityConfirmed: true, identityDistance: distance });
     } catch (error) {
-      if (version === this.version && pending === this.pending) {
-        // Fail closed: do not emit OSC/ComfyUI on a failed identity comparison.
+      if (version === this.version) {
         this.onStatus('error', null, error);
         this.nextSampleAt = now + 5000;
       }
     } finally {
-      this.busy = false;
+      if (this.busy === operation) this.busy = false;
     }
   }
 }

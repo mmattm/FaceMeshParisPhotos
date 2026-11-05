@@ -187,6 +187,27 @@ body.interface-hidden .stage-container {
   transform: scaleX(-1);
 }
 
+.visitor-reference-card {
+  left: calc(30px + min(200px, 32vw));
+  width: min(150px, 23vw);
+}
+
+.visitor-reference-card .webrtc-preview-header {
+  white-space: normal;
+}
+
+.visitor-reference-card .webrtc-preview-header > span {
+  white-space: normal;
+}
+
+#visitor-reference-preview {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #000;
+  transform: scaleX(-1);
+}
+
 .webrtc-preview-card {
   position: absolute;
   top: 66px;
@@ -200,6 +221,28 @@ body.interface-hidden .stage-container {
   background: rgba(0, 0, 0, 0.82);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.34);
   pointer-events: none;
+}
+
+.webcam-recognition-status {
+  padding: 8px;
+  color: #d4d4d4;
+  font: 10px/1.5 var(--font-mono);
+}
+
+.recognition-crop {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.recognition-crop canvas {
+  width: 100px;
+  height: 100px;
+  flex-shrink: 0;
+  background: #000;
+  border-radius: var(--radius-sm);
 }
 
 .webrtc-preview-header {
@@ -422,6 +465,45 @@ body.interface-hidden .stage-container {
   align-items: center;
   border-bottom: 1px solid var(--border-light);
   padding-bottom: 10px;
+}
+
+.general-settings-dialog {
+  margin: auto;
+  color: var(--text-main);
+  max-height: 85vh;
+  overflow-y: auto;
+}
+
+.general-settings-dialog:not([open]) {
+  display: none;
+}
+
+.general-settings-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+}
+
+.general-settings-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.general-settings-fields .blend-control {
+  flex-wrap: wrap;
+}
+
+.general-settings-fields .blend-control > span:first-child {
+  flex: 1;
+  min-width: 160px;
+}
+
+.general-settings-fields input[type="number"] {
+  padding: 5px;
+  color: var(--text-main);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
 }
 
 .modal-title {
@@ -837,8 +919,10 @@ body.interface-hidden .stage-container {
   position: fixed;
   top: 68px;
   right: 20px;
-  width: 320px;
+  width: 380px;
   max-width: calc(100vw - 40px);
+  max-height: calc(100dvh - 92px);
+  overflow: hidden;
   background: var(--bg-surface);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
@@ -867,8 +951,7 @@ body.interface-hidden .stage-container {
   left: 20px;
   right: auto;
   width: 350px;
-  max-height: calc(100dvh - 200px);
-  overflow-y: auto;
+  max-height: calc(100dvh - 92px);
 }
 
 .facemesh-position-hint {
@@ -902,6 +985,7 @@ body.interface-hidden .stage-container {
 .facemesh-position-actions .tool-btn { padding: 6px 9px; font-size: 11px; }
 
 .align-panel-header {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -945,6 +1029,10 @@ body.interface-hidden .stage-container {
 }
 
 .align-panel-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   padding: 12px 14px;
   display: flex;
   flex-direction: column;

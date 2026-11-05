@@ -6,6 +6,8 @@
  */
 
 import { CameraManager } from './core/camera.js';
+import { setupExhibitionMode } from './ui/exhibitionMode.js';
+import { CameraPageRecovery } from './ui/cameraPageRecovery.js';
 import { FaceTracker } from './core/tracker.js';
 import { FaceMeshRenderer } from './core/renderer.js';
 import { ExpressionLooper } from './mocap/expressionLooper.js';
@@ -18,7 +20,6 @@ import { VisitorIdentity } from './core/visitorIdentity.js';
 import { FaceRecognition } from './core/faceRecognition.js';
 import { LiveFaceTextureGate } from './core/liveFaceTextureGate.js';
 import { FaceProximityGate } from './core/faceProximityGate.js';
-import { StableRecognitionStatus } from './ui/stableRecognitionStatus.js';
 import { createFallbackFaceLandmarks } from './core/fallbackFace.js';
 import { CanvasBroadcaster } from './webrtc/canvasBroadcaster.js';
 import { MotionPresetRecorder } from './mocap/motionPresetRecorder.js';
@@ -28,6 +29,7 @@ import { AudioLibraryControls } from './ui/audioLibraryControls.js';
 
 class App {
   constructor() {
+    this.exhibitionMode = setupExhibitionMode();
     this.videoEl = document.getElementById('webcam-video');
     this.webcamPreviewEl = document.getElementById('webcam-preview-video');
     this.canvasEl = document.getElementById('output-canvas');
@@ -36,12 +38,20 @@ class App {
 
     // Modules
     this.camera = new CameraManager(this.videoEl);
+    let recoveryStorage = null;
+    try { recoveryStorage = sessionStorage; } catch { /* Camera reconnection remains available. */ }
+    this.cameraPageRecovery = new CameraPageRecovery({
+      camera: this.camera, storage: recoveryStorage, reload: () => window.location.reload(),
+      canReload: () => !this.isVisitorDetectionBlocked()
+    });
     this.tracker = new FaceTracker({ smoothing: true });
     this.liveFaceTextureGate = new LiveFaceTextureGate();
     this.faceProximityGate = new FaceProximityGate();
     try {
       const saved = localStorage.getItem('photomaton_min_face_height_percent_v2');
       if (saved !== null) this.faceProximityGate.setThresholdPercent(saved);
+      const calibration = localStorage.getItem('photomaton_live_face_calibration_v1');
+      if (calibration) this.liveFaceTextureGate.setCalibration(JSON.parse(calibration));
     } catch { /* Keep the default distance threshold. */ }
     this.renderer = new FaceMeshRenderer(this.canvasEl, this.videoEl);
     this.looper = new ExpressionLooper();
@@ -64,44 +74,38 @@ class App {
     this.visitorDetector = new VisitorDetector({
       absenceMs: savedVisitorAbsence === null ? 3000 : Number(savedVisitorAbsence)
     });
-    const recognition = new FaceRecognition();
-    const recognitionStatus = new StableRecognitionStatus();
+    const recognition = new FaceRecognition({ onCrop: canvas => {
+      const preview = document.getElementById('recognition-crop-preview');
+      preview?.getContext('2d').drawImage(canvas, 0, 0);
+    } });
     this.visitorIdentity = new VisitorIdentity({
-      describe: (video, tracking) => recognition.describe(video, tracking),
+      capture: (video, tracking, options) => recognition.capturePortrait(video, tracking, options),
+      describe: portrait => recognition.describePortrait(portrait),
+      onReference: portrait => {
+        for (const id of ['recognition-reference-preview', 'visitor-reference-preview']) {
+          const savedPortrait = document.getElementById(id);
+          if (!savedPortrait) continue;
+          const context = savedPortrait.getContext('2d');
+          context.clearRect(0, 0, 150, 150);
+          if (portrait) context.drawImage(portrait, 0, 0);
+        }
+        const label = document.getElementById('visitor-reference-status');
+        if (label) label.textContent = portrait ? 'Référence de comparaison' : 'En attente de visiteur';
+      },
       onNewVisitor: detail => {
         if (detail.reason !== 'MANUAL_REFERENCE') this.handleNewVisitor(detail);
       },
-      onSameVisitor: () => {
-        this.showNotification('Même visiteur reconnu · session conservée',
-          'success', 15000, 'visitor-same');
+      onSameVisitor: distance => {
+        this.showNotification(`Même visiteur reconnu · distance ${distance.toFixed(3)}`,
+          'success', 15000, 'visitor-result');
       },
-      onStatus: (status, distance, error) => {
-        const displayedStatus = recognitionStatus.update(status, performance.now());
-        const absenceSlider = document.getElementById('slider-visitor-absence');
-        if (absenceSlider) absenceSlider.disabled = this.visitorIdentity.enabled;
-        const button = document.getElementById('btn-visitor-identity');
-        const labels = { checking: 'comparaison…', ready: 'active', same: 'même visiteur',
-          new: 'nouveau confirmé', uncertain: 'à confirmer', error: 'indisponible', disabled: 'désactivée',
-          tooFar: 'rapprochez-vous', stabilizing: 'stabilisation', waiting: 'en attente de visage',
-          position: 'visage de face et entier', paused: 'pause pendant le rendu' };
-        if (button) {
-          const label = `Reconnaissance : ${labels[displayedStatus]}`;
-          if (button.textContent !== label) button.textContent = label;
-          button.classList.toggle('active', this.visitorIdentity.enabled);
-          button.setAttribute('aria-pressed', String(this.visitorIdentity.enabled));
-          button.title = distance == null ? 'Comparer au dernier visiteur, uniquement en mémoire'
-            : `Distance visage : ${distance.toFixed(3)} (identique ≤ 0.50 ; différent ≥ 0.62)`;
-        }
-        if (error) {
-          console.error('[VisitorIdentity]', error);
-          this.showNotification('Reconnaissance indisponible : désactivez-la pour utiliser la détection par absence.',
-            'error', 5000, 'visitor-identity');
-        }
-      }
+      onStatus: (status, distance, error) => this.updateVisitorRecognitionStatus(status, distance, error)
     });
     try {
       const savedReset = localStorage.getItem('photomaton_visitor_identity_reset_ms');
       if (savedReset !== null) this.visitorIdentity.setAbsenceResetMs(savedReset);
+      const savedThreshold = localStorage.getItem('photomaton_visitor_same_threshold');
+      if (savedThreshold !== null) this.visitorIdentity.setSameThreshold(savedThreshold);
     } catch { /* Keep the default one-minute reset. */ }
     this.visitorDetector.addEventListener('new-visitor', (e) => {
       if (!this.isVisitorDetectionBlocked() && !this.visitorIdentity.enabled) {
@@ -217,12 +221,18 @@ class App {
 
       // 2. Start Camera (720p 60fps)
       if (this.loadingText) this.loadingText.textContent = 'Starting camera stream...';
+      this.cameraPageRecovery.start();
       try {
         await this.camera.start(null, { width: 1280, height: 720 });
       } catch (camErr) {
         console.warn('Camera failed to start:', camErr);
         this.showNotification('Webcam indisponible : buste autonome avec visage de secours.', '', 6000, 'camera');
       }
+      this.camera.startWatchdog();
+      window.addEventListener('pagehide', () => {
+        this.cameraPageRecovery.stop();
+        this.camera.stop();
+      }, { once: true });
 
       // 3. Initialize the fixed Full HD render surface once. Its CSS display
       // adapts to the operator window without changing the WebRTC composition.
@@ -247,11 +257,62 @@ class App {
     }
   }
 
+  updateVisitorRecognitionStatus(status, distance, error) {
+    if (['waiting', 'tooFar', 'stabilizing', 'position', 'error', 'disabled'].includes(status)) {
+      const oldResult = this.notificationEntries?.get('visitor-result');
+      if (oldResult) {
+        clearTimeout(oldResult.timer);
+        oldResult.element.remove();
+        this.notificationEntries.delete('visitor-result');
+      }
+    }
+    const distanceLabel = document.getElementById('visitor-identity-distance');
+    if (distanceLabel) distanceLabel.textContent = Number.isFinite(distance)
+      ? `Distance visage : ${distance.toFixed(3)} · seuil ${this.visitorIdentity.sameThreshold.toFixed(2)}`
+      : 'Distance visage : en attente';
+    const absenceSlider = document.getElementById('slider-visitor-absence');
+    if (absenceSlider) absenceSlider.disabled = this.visitorIdentity.enabled;
+    const button = document.getElementById('btn-visitor-identity');
+    const labels = { ready: 'active', active: 'visiteur actuel', same: 'même visiteur', checking: 'analyse en cours…',
+      new: 'nouveau visiteur', error: 'indisponible', disabled: 'désactivée',
+      tooFar: 'rapprochez-vous', stabilizing: 'stabilisation', waiting: 'en attente de visage',
+      position: 'visage de face et entier', paused: 'pause pendant le rendu' };
+    const liveStatus = document.getElementById('webcam-recognition-status');
+    if (liveStatus) liveStatus.textContent = `Reconnaissance : ${labels[status] || status}`
+      + (status === 'tooFar' ? ` (${Math.round(this.faceProximityGate.faceHeightPercent || 0)}% / minimum ${this.faceProximityGate.thresholdPercent}%)` : '')
+      + (status === 'error' && error ? ` · ${error.message}` : '')
+      + (Number.isFinite(distance) ? ` · distance ${distance.toFixed(3)} / seuil ${this.visitorIdentity.sameThreshold.toFixed(2)}` : '');
+    if (button) {
+      const label = `Reconnaissance : ${labels[status] || status}`;
+      if (button.textContent !== label) button.textContent = label;
+      button.classList.toggle('active', this.visitorIdentity.enabled);
+      button.setAttribute('aria-pressed', String(this.visitorIdentity.enabled));
+      button.title = distance == null ? 'Comparer au dernier visiteur, uniquement en mémoire'
+        : `Distance visage : ${distance.toFixed(3)} (identique ≤ ${this.visitorIdentity.sameThreshold.toFixed(2)} ; nouveau au-dessus)`;
+    }
+    if (error) {
+      console.error('[VisitorIdentity]', error);
+      this.showNotification('Reconnaissance indisponible : désactivez-la pour utiliser la détection par absence.',
+        'error', 5000, 'visitor-identity');
+    }
+  }
+
   handleResize() {
     this.renderer.resize(1920, 1080, 1);
   }
 
   setupEventListeners() {
+    const generalSettings = document.getElementById('general-settings-dialog');
+    document.getElementById('btn-open-general-settings')?.addEventListener('click', () => {
+      if (generalSettings && !generalSettings.open) generalSettings.showModal();
+    });
+    document.getElementById('btn-close-general-settings')?.addEventListener('click', () => generalSettings?.close());
+    generalSettings?.addEventListener('click', event => {
+      if (event.target !== generalSettings) return;
+      const bounds = generalSettings.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX > bounds.right
+        || event.clientY < bounds.top || event.clientY > bounds.bottom) generalSettings.close();
+    });
     const oscDropdown = document.querySelector('.osc-dropdown');
     document.addEventListener('click', event => {
       if (oscDropdown && !oscDropdown.contains(event.target)) oscDropdown.open = false;
@@ -454,6 +515,17 @@ class App {
 
     // 6. Absence duration before starting a new visit.
     const sliderVisitorSens = document.getElementById('slider-visitor-absence');
+    const sameThresholdInput = document.getElementById('visitor-same-threshold');
+    if (sameThresholdInput) {
+      sameThresholdInput.value = this.visitorIdentity.sameThreshold.toFixed(2);
+      sameThresholdInput.addEventListener('change', () => {
+        this.visitorIdentity.setSameThreshold(sameThresholdInput.value);
+        sameThresholdInput.value = this.visitorIdentity.sameThreshold.toFixed(2);
+        try {
+          localStorage.setItem('photomaton_visitor_same_threshold', sameThresholdInput.value);
+        } catch { /* Keep the setting for this session. */ }
+      });
+    }
     const identityResetInput = document.getElementById('visitor-identity-reset-seconds');
     if (identityResetInput) {
       identityResetInput.value = String(this.visitorIdentity.absenceResetMs / 1000);
@@ -467,6 +539,25 @@ class App {
     }
     const faceSizeSlider = document.getElementById('slider-min-face-size');
     const faceSizeLabel = document.getElementById('val-min-face-size');
+    document.getElementById('btn-calibrate-live-face')?.addEventListener('click', () => {
+      const status = document.getElementById('live-calibration-status');
+      try {
+        const tracking = this.tracker.lastTrackingResult;
+        if (this.camera.state !== 'active' || !tracking?.detected) throw new Error('Webcam active et visage visible nécessaires');
+        const percent = this.liveFaceTextureGate.calibrate(tracking);
+        this.faceProximityGate.setThresholdPercent(percent);
+        if (faceSizeSlider) faceSizeSlider.value = String(percent);
+        if (faceSizeLabel) faceSizeLabel.textContent = `${percent}%`;
+        let saved = true;
+        try {
+          localStorage.setItem('photomaton_min_face_height_percent_v2', String(percent));
+          localStorage.setItem('photomaton_live_face_calibration_v1', JSON.stringify(this.liveFaceTextureGate.calibration));
+        } catch { saved = false; }
+        if (status) status.textContent = `Position calibrée · minimum ${percent}%${saved ? ' · mémorisée' : ' · pour cette session'}`;
+      } catch (error) {
+        if (status) status.textContent = error.message;
+      }
+    });
     if (faceSizeSlider) {
       faceSizeSlider.value = this.faceProximityGate.thresholdPercent;
       if (faceSizeLabel) faceSizeLabel.textContent = `${this.faceProximityGate.thresholdPercent}%`;
@@ -516,7 +607,11 @@ class App {
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName) || e.target.isContentEditable) return;
       if (e.isComposing || e.ctrlKey || e.altKey || e.metaKey) return;
 
-      if (e.key.toLowerCase() === 'm') {
+      if (e.key.toLowerCase() === 'n') {
+        if (e.repeat) return;
+        e.preventDefault();
+        document.getElementById('btn-debug-new-visitor')?.click();
+      } else if (e.key.toLowerCase() === 'm') {
         if (e.repeat) return;
         e.preventDefault();
         document.body.classList.toggle('interface-hidden');
@@ -1117,6 +1212,10 @@ class App {
   }
 
   showNotification(message, state = '', durationMs = 1500, key = 'general') {
+    if (this.exhibitionMode) {
+      if (state === 'error') console.error('[Exposition]', message);
+      return;
+    }
     if (durationMs > 0) durationMs = Math.min(durationMs, state === 'error' ? 2500 : 1500);
     const container = document.getElementById('app-notifications');
     if (!container) return;
@@ -1556,12 +1655,24 @@ class App {
       const now = performance.now();
       // Reuse the active camera stream, including after a camera switch or stop.
       if (this.webcamPreviewEl && this.webcamPreviewEl.srcObject !== this.videoEl.srcObject) {
+        this.tracker.lastVideoTime = -1;
+        this.tracker.lastTrackingResult = null;
+        this.faceProximityGate.setThresholdPercent(this.faceProximityGate.thresholdPercent);
         this.webcamPreviewEl.srcObject = this.videoEl.srcObject;
         if (this.videoEl.srcObject) {
           void this.webcamPreviewEl.play().catch(error => console.warn('Webcam preview:', error));
         }
       }
       this.audioLibrary?.updateTestPlayback();
+
+      const cameraStatus = document.getElementById('webcam-camera-status');
+      if (cameraStatus) {
+        const labels = { active: 'Webcam active', connecting: 'Webcam : reconnexion…',
+          permission: 'Webcam : autorisation refusée dans Chrome', unavailable: 'Webcam indisponible · nouvelle tentative automatique',
+          stopped: 'Webcam arrêtée' };
+        cameraStatus.textContent = labels[this.camera.state] || 'Webcam en attente';
+        if (this.cameraPageRecovery.message) cameraStatus.textContent += ` · ${this.cameraPageRecovery.message}`;
+      }
 
       // 1. MediaPipe Frame Inference
       const cameraAvailable = this.camera.isStreaming
@@ -1574,7 +1685,16 @@ class App {
         faceSizeStatus.textContent = percent ? `${percent}%${rawTracking?.tooFar ? ' · rapprochez-vous'
           : rawTracking?.proximityPending ? ' · stabilisation' : ''}` : 'Aucun visage';
       }
-      this.liveFaceTextureGate.update(rawTracking, now);
+      this.liveFaceTextureGate.update(rawTracking, now, this.faceProximityGate.thresholdPercent / 100);
+      const liveStatus = document.getElementById('webcam-live-status');
+      if (liveStatus) {
+        const gate = this.liveFaceTextureGate;
+        const labels = { waiting: 'aucun visage', distance: 'rapprochez-vous', centering: 'recentrez le visage',
+          pose: 'regardez la caméra', clipped: 'reculez légèrement, visage coupé', stabilizing: 'stabilisation…', live: 'position validée' };
+        const size = gate.measurement ? `${(gate.measurement.height * 100).toFixed(1)}% / min ${this.faceProximityGate.thresholdPercent}%` : '';
+        liveStatus.textContent = this.forceAutonomousMode ? 'Live désactivé : mode autonome forcé (A)'
+          : `FaceMesh live : ${labels[gate.reason]}${size ? ` · ${size}` : ''}`;
+      }
       // Tracking remains live regardless of which portrait is displayed.
       if (rawTracking?.detected) {
         this.lastTrackingLandmarks = rawTracking.landmarks.map(p => ({ ...p }));
@@ -1591,10 +1711,20 @@ class App {
       // Use full-camera detection for tracking, recognition and the absence timer.
       // Forcing autonomous playback alone must not count as a visitor leaving.
       this.visitorDetector.update(isVisitorInFrame ? rawTracking : null, now);
-      if (!this.isVisitorDetectionBlocked()) {
-        void this.visitorIdentity.observe(rawTracking, this.videoEl, now);
-      } else if (this.visitorIdentity.enabled) {
-        this.visitorIdentity.onStatus('paused');
+      void this.visitorIdentity.observe(rawTracking, this.videoEl, now, {
+        paused: this.isVisitorDetectionBlocked()
+      });
+      const absenceStatus = document.getElementById('visitor-reset-status');
+      if (absenceStatus) {
+        const identity = this.visitorIdentity;
+        absenceStatus.textContent = !identity.enabled ? 'Reset : reconnaissance désactivée'
+          : identity.absenceResetMs === 0 ? 'Reset après absence désactivé'
+          : this.isVisitorDetectionBlocked() ? 'Détection en pause pendant le rendu'
+          : !identity.reference ? (rawTracking?.tooFar ? 'Rapprochez-vous pour démarrer une visite'
+            : rawTracking?.proximityPending ? 'Visage détecté · stabilisation…'
+              : 'Aucun portrait mémorisé · en attente d’un visage assez proche')
+          : identity.absentSince === null ? 'Visage présent · compteur d’absence arrêté'
+          : `Absence · reset dans ${Math.max(0, Math.ceil((identity.absenceResetMs - (now - identity.absentSince)) / 1000))} s`;
       }
       this.updateAutonomousAvailability();
 
@@ -1650,13 +1780,13 @@ class App {
           this.presetRecorder.capture(rawTracking, now);
         }
 
-        // Live tracking drives either the visitor texture or the fallback portrait.
+        // A close, centered visitor fades into the live portrait; tracking stays active throughout.
         this.isBlendingToLive = false;
         this.autoExitLandmarks = null;
         if (this.renderer.isTextureFrozen) this.renderer.unfreezeFaceTexture();
         this.renderer.setAutonomousFallback(!this.liveFaceTextureGate.allowed
           || !this.renderer.videoTexture || this.videoEl.readyState < 2);
-        const renderResult = { ...rawTracking, liveTexturePreferred: true };
+        const renderResult = rawTracking;
         this.lastRenderedTrackingResult = renderResult;
         this.renderer.render(renderResult);
 
@@ -1836,7 +1966,7 @@ class App {
     if (fallbackTest) {
       fallbackTest.disabled = true;
       fallbackTest.textContent = fallback ? 'Visage : fallback' : 'Visage : FaceMesh';
-      fallbackTest.title = 'Live : FaceMesh si disponible. Autonome : fallback. Transition en fondu.';
+      fallbackTest.title = 'Fondu vers le FaceMesh live si le visage est proche, centré et de face ; fallback sinon.';
     }
     const button = document.getElementById('btn-toggle-face-texture');
     if (!button) return;
@@ -1888,7 +2018,7 @@ class App {
     // minimalist render and its one-second video-return delay.
     if (this.isVisitorDetectionBlocked()) return;
     this.showNotification(detail.identityConfirmed ? 'Nouveau visiteur reconnu'
-      : 'Nouveau visiteur détecté', 'success', 15000, 'visitor-new');
+      : 'Nouveau visiteur détecté', 'success', 15000, 'visitor-result');
     // Invalidate old render monitors immediately, before the one-second delay.
     this.comfyCallId++;
     if (this.comfySettings.enabled && this.comfySettings.baseUrl) {
@@ -1911,7 +2041,7 @@ class App {
       : Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
     this.updateVisitorIdUI();
     const reason = detail.reason || 'MANUAL';
-    console.log(`[VisitorDetector] Visiteur ${this.currentVisitorId} (${reason}, absence : ${Math.round(detail.absenceDuration || 0)} ms)`);
+    console.log(`[VisitorDetector] Visiteur ${this.currentVisitorId} (${reason}, absence : ${Math.round(detail.absenceDuration || 0)} ms, distance : ${Number.isFinite(detail.identityDistance) ? detail.identityDistance.toFixed(3) : 'première capture'}, seuil : ${this.visitorIdentity.sameThreshold.toFixed(2)})`);
 
     this.setState('NEW_PERSON');
 

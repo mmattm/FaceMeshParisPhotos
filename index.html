@@ -194,6 +194,16 @@
     <aside class="webcam-preview-card" aria-label="Aperçu du flux webcam">
       <div class="webrtc-preview-header"><span>WEBCAM</span></div>
       <video id="webcam-preview-video" autoplay playsinline muted aria-label="Flux webcam en direct"></video>
+      <p id="webcam-camera-status" class="webcam-recognition-status" role="status">Webcam en attente</p>
+      <p id="webcam-live-status" class="webcam-recognition-status" role="status">FaceMesh live : en attente</p>
+      <p id="webcam-recognition-status" class="webcam-recognition-status" role="status">Reconnaissance : en attente</p>
+      <p id="visitor-reset-status" class="webcam-recognition-status" role="status">Prêt : prochain visage = nouveau visiteur</p>
+    </aside>
+
+    <aside class="webcam-preview-card visitor-reference-card" aria-label="Portrait du visiteur utilisé pour la comparaison">
+      <div class="webrtc-preview-header"><span>VISITEUR ACTUEL</span></div>
+      <canvas id="visitor-reference-preview" width="150" height="150" aria-label="Portrait de référence mémorisé"></canvas>
+      <p id="visitor-reference-status" class="webcam-recognition-status" role="status">En attente de visiteur</p>
     </aside>
 
     <aside class="webrtc-preview-card" aria-label="Aperçu de la sortie vidéo WebRTC">
@@ -451,11 +461,12 @@
       </div>
     </section>
 
-    <!-- Center Bottom Panel -->
-    <footer class="bottom-panel">
-      <!-- Motion-only preset recorder -->
-      <div class="looper-card">
-        <div class="simple-settings-row">
+    <dialog id="general-settings-dialog" class="modal-card general-settings-dialog" aria-labelledby="general-settings-title">
+      <div class="modal-header">
+        <h2 id="general-settings-title" class="modal-title">Réglages</h2>
+        <button id="btn-close-general-settings" class="tool-btn" type="button" aria-label="Fermer les réglages">Fermer</button>
+      </div>
+      <div class="general-settings-fields">
           <label class="blend-control" for="slider-expression-intensity" title="Intensité des sourcils, du regard et du sourire pendant les presets">
             <span>Expressions</span>
             <input type="range" id="slider-expression-intensity" class="blend-slider" min="50" max="220" step="10" value="160" style="width: 85px;">
@@ -474,13 +485,39 @@
             <input type="range" id="slider-min-face-size" class="blend-slider" min="5" max="70" step="1" value="40" style="width:85px;">
             <span id="val-min-face-size">40%</span>
           </label>
+          <button id="btn-calibrate-live-face" class="tool-btn" type="button"
+            title="Se placer à la distance souhaitée puis cliquer : calibre le centre, l’orientation et le seuil Visage minimum pour cette position.">Calibrer ma position pour le live</button>
+          <span id="live-calibration-status" class="mono-stat" role="status">Distance, centre et orientation mémorisés après calibration</span>
           <label class="blend-control" for="visitor-identity-reset-seconds"
             title="Avec la reconnaissance active : oublier le dernier visage après cette absence continue. Le prochain visage démarre une nouvelle visite, même pour la même personne. 0 désactive ce reset.">
             <span>Reset après absence :</span>
             <input id="visitor-identity-reset-seconds" type="number" min="0" max="600" step="1" value="60" style="width: 60px;">
             <span>s (0 = désactivé)</span>
           </label>
+          <label class="blend-control" for="visitor-same-threshold"
+            title="Baisser cette valeur si deux personnes différentes sont reconnues comme identiques. Une valeur trop basse peut aussi déclarer la même personne comme nouvelle.">
+            <span>Seuil même visiteur :</span>
+            <input id="visitor-same-threshold" type="number" min="0.25" max="0.50" step="0.01" value="0.42" style="width: 70px;">
+          </label>
+          <span id="visitor-identity-distance" class="mono-stat" role="status">Distance visage : en attente</span>
+          <figure class="recognition-crop">
+            <canvas id="recognition-reference-preview" width="150" height="150" aria-label="Portrait de référence du dernier visiteur"></canvas>
+            <canvas id="recognition-crop-preview" width="150" height="150" aria-label="Dernière image analysée par la reconnaissance"></canvas>
+            <figcaption>À gauche : portrait mémorisé. À droite : visage présent. Une comparaison suffit pour déclencher une nouvelle visite si les visages sont différents.</figcaption>
+          </figure>
           <span id="face-size-status" class="mono-stat" role="status">Aucun visage</span>
+      </div>
+    </dialog>
+
+    <!-- Center Bottom Panel -->
+    <footer class="bottom-panel">
+      <!-- Sub-controls: Align 3D, Autonome, Buste, ComfyUI -->
+      <div class="sub-controls">
+        <button id="btn-open-general-settings" class="tool-btn" type="button" aria-haspopup="dialog" aria-controls="general-settings-dialog">Réglages</button>
+          <button id="btn-debug-new-visitor" class="tool-btn debug-visitor-btn" type="button" aria-keyshortcuts="n"
+            title="Simuler un nouveau visiteur : nouvelle capture FaceMesh et appel ComfyUI après 1 seconde si activé">
+            ↻ Test visiteur (N)
+          </button>
           <details class="osc-dropdown">
             <summary class="tool-btn">OSC</summary>
             <div class="osc-dropdown-menu">
@@ -494,17 +531,6 @@
           </button>
             </div>
           </details>
-          <div class="visitor-test-row">
-          <button id="btn-debug-new-visitor" class="tool-btn debug-visitor-btn" type="button"
-            title="Simuler un nouveau visiteur : nouvelle capture FaceMesh et appel ComfyUI après 1 seconde si activé">
-            ↻ Test visiteur
-          </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Sub-controls: Align 3D, Autonome, Buste, ComfyUI -->
-      <div class="sub-controls">
         <!-- 3D Camera Alignment / Offset Mode Toggle -->
         <button id="btn-toggle-align" class="tool-btn" title="Mode alignement 3D : déplacer et orienter la caméra (O)">
           <span>📐 Align 3D</span>
@@ -519,7 +545,7 @@
         </button>
 
         <button id="btn-test-fallback" class="tool-btn active" type="button" aria-pressed="true" disabled
-          title="Live : FaceMesh si disponible. Autonome : fallback. Transition en fondu.">
+          title="Fondu vers le FaceMesh live si le visage est proche, centré et de face ; fallback sinon.">
           Visage : fallback
         </button>
 

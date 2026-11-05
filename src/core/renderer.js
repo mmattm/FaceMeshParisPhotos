@@ -14,6 +14,8 @@ import { relaxEyelids } from './relaxedEyelids.js';
 import { lockLiveDepth } from './liveDepthLock.js';
 import { centerBustFrame } from './centerBustFrame.js';
 import { createTeethTexture } from './teethTexture.js';
+import { PortraitBlend } from './portraitBlend.js';
+import { PortraitCompositor } from './portraitCompositor.js';
 
 export class FaceMeshRenderer {
   constructor(canvasElement, videoElement = null) {
@@ -24,7 +26,8 @@ export class FaceMeshRenderer {
     this.isFaceTextureEnabled = true;
     this.showBust = true;
     this.minimalistMode = false;
-    this.autonomousFallback = false;
+    this.autonomousFallback = true;
+    this.portraitBlend = new PortraitBlend();
     this.autonomousRenderScale = 1;
     this.faceMeshVisible = true;
     this.faceMeshAlignment = { x: 0, y: 3.5, z: -9, scale: 95.5, pitch: 0, yaw: 0, roll: 0 };
@@ -66,6 +69,7 @@ export class FaceMeshRenderer {
     this.renderer.autoClearStencil = true;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.15;
+    this.portraitCompositor = new PortraitCompositor(this.renderer);
 
     this.scene = new THREE.Scene();
 
@@ -1366,50 +1370,8 @@ if (uDepartureMix < 1.0) {
   }
 
   clear() {
-    this.hasRenderedPortrait = false;
-    this.portraitFadeStartedAt = null;
+    this.portraitBlend.reset();
     this.renderer.clear(true, true, true);
-  }
-
-  beginPortraitCrossfade() {
-    if (!this.portraitFadeCanvas) {
-      this.portraitFadeCanvas = document.createElement('canvas');
-      this.portraitFadeContext = this.portraitFadeCanvas.getContext('2d');
-      this.portraitFadeTexture = new THREE.CanvasTexture(this.portraitFadeCanvas);
-      this.portraitFadeTexture.colorSpace = THREE.SRGBColorSpace;
-      this.portraitFadeMaterial = new THREE.MeshBasicMaterial({
-        map: this.portraitFadeTexture, transparent: true,
-        depthTest: false, depthWrite: false, toneMapped: false
-      });
-      this.portraitFadeScene = new THREE.Scene();
-      this.portraitFadeCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 2);
-      const overlay = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.portraitFadeMaterial);
-      overlay.position.z = -1;
-      this.portraitFadeScene.add(overlay);
-    }
-    this.portraitFadeCanvas.width = this.canvas.width;
-    this.portraitFadeCanvas.height = this.canvas.height;
-    // Capture the previous composited frame, including any interrupted fade.
-    this.portraitFadeContext.drawImage(this.canvas, 0, 0);
-    this.portraitFadeTexture.needsUpdate = true;
-    this.portraitFadeStartedAt = performance.now();
-  }
-
-  renderPortraitCrossfade() {
-    if (this.portraitFadeStartedAt == null) return;
-    const progress = Math.min(1, (performance.now() - this.portraitFadeStartedAt) / 550);
-    if (progress >= 1 || this.minimalistMode) {
-      this.portraitFadeStartedAt = null;
-      return;
-    }
-    this.portraitFadeMaterial.opacity = 1 - progress * progress * (3 - 2 * progress);
-    const autoClear = this.renderer.autoClear;
-    this.renderer.autoClear = false;
-    try {
-      this.renderer.render(this.portraitFadeScene, this.portraitFadeCamera);
-    } finally {
-      this.renderer.autoClear = autoClear;
-    }
   }
 
   /**
@@ -1606,10 +1568,15 @@ if (uDepartureMix < 1.0) {
       this.updateCameraTransform();
     }
 
-    if (this.hasRenderedPortrait && !this.minimalistMode
-      && this.lastRenderedFallback !== this.autonomousFallback) {
-      this.beginPortraitCrossfade();
+    if (autonomous && !this.lastPortraitAutonomous && this.portraitBlend.value > 0) {
+      // Keep the last real face if it has left the camera during the outgoing fade.
+      this.portraitCompositor.freezeLiveFrame(this.canvas);
     }
+    if (!autonomous) this.portraitCompositor.frozen = false;
+    this.lastPortraitAutonomous = autonomous;
+    const liveMix = this.minimalistMode
+      ? this.portraitBlend.reset(!this.autonomousFallback)
+      : this.portraitBlend.update(!this.autonomousFallback, performance.now());
 
     this.liveDepthReference ??= {};
     trackingResult = lockLiveDepth(trackingResult, this.liveDepthReference,
@@ -1624,10 +1591,9 @@ if (uDepartureMix < 1.0) {
     this.departureTextureUniforms.mix.value = this.isTextureFrozen && this.videoTexture
       ? (trackingResult.departureTextureMix ?? 1) : 1;
     this.departureTextureUniforms.liveMap.value = this.videoTexture || null;
-    const visitorBust = this.showBust && !this.autonomousFallback;
     // Texture and presentation determine the neutral opening, never live/auto.
     // Apply the operator's eye-opening setting equally to tracked and animated eyes.
-    const baseEyelidReduction = visitorBust ? -0.08 : -0.22;
+    const baseEyelidReduction = -0.22 + (this.showBust ? 0.14 * liveMix : 0);
     const profileEyelidReduction = 1 - (1 - baseEyelidReduction)
       * (this.cameraOffset.eyeOpening ?? 100) / 100;
     // Reduce the drawn aperture in every mode, including live camera tracking.
@@ -1680,7 +1646,7 @@ if (uDepartureMix < 1.0) {
     this.uvAttribute.needsUpdate = true;
     this.departureLiveUvAttribute.needsUpdate = true;
     this.geometry.computeVertexNormals();
-    if (this.autonomousFallback) this.fallbackFaceGeometry.computeVertexNormals();
+    if (liveMix < 1) this.fallbackFaceGeometry.computeVertexNormals();
 
     // Live video texture refresh
     const needsTexture = this.isFaceTextureEnabled
@@ -1809,10 +1775,30 @@ if (uDepartureMix < 1.0) {
     if (this.showBust && !this.minimalistMode) this.bustOverlay?.alignFacePose(this.faceMeshRoot);
     this.updateAutonomousFraming(trackingResult);
 
-    // Render WebGL scene
-    this.renderer.render(this.scene, this.camera);
-    this.renderPortraitCrossfade();
-    this.lastRenderedFallback = this.autonomousFallback;
-    this.hasRenderedPortrait = !this.minimalistMode;
+    // Both appearances follow the same current geometry throughout the fade.
+    const requestedFallback = this.autonomousFallback;
+    const drawPortrait = fallback => {
+      this.autonomousFallback = fallback;
+      this.useLiveMouthTexture = !isAutonomous && !fallback;
+      this.updateVisibility();
+      this.updateMouthTeeth();
+      const source = fallback && this.fallbackTextureLandmarks ? this.fallbackTextureLandmarks : uvSource;
+      const liveSource = liveLandmarks || sourceLandmarks;
+      for (let i = 0; i < len; i++) {
+        const uv = fallback ? source[i] : (this.isTextureFrozen ? source[i] : liveSource[i]);
+        this.uvs[i * 2] = uv.x;
+        this.uvs[i * 2 + 1] = 1 - uv.y;
+      }
+      this.uvAttribute.needsUpdate = true;
+      this.renderer.render(this.scene, this.camera);
+    };
+    try {
+      if (this.minimalistMode) drawPortrait(requestedFallback);
+      else this.portraitCompositor.render(liveMix, drawPortrait);
+    } finally {
+      this.autonomousFallback = requestedFallback;
+      this.useLiveMouthTexture = !isAutonomous && !requestedFallback;
+      this.updateVisibility();
+    }
   }
 }

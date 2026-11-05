@@ -35,6 +35,7 @@ temp/
 # Local verification artifacts and browser profiles
 /.mouth-build-check/
 /.fallback-browser-test*/
+/.exhibition-chrome/
 
 # OS metadata
 .DS_Store
