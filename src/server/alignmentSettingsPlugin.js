@@ -21,18 +21,26 @@ export function alignmentSettingsPlugin({ file = path.resolve('library/camera-al
       const { mode, values } = JSON.parse(body);
       const limits = { x: [-300, 300], y: [-300, 300], pitch: [-45, 45],
         yaw: [-45, 45], roll: [-30, 30], zoom: [0.5, 2.0] };
-      if (!['live', 'autonomous_bust', 'minimalist'].includes(mode)
+      if (!['live', 'live_bust', 'autonomous_bust', 'minimalist'].includes(mode)
         || !values || Object.entries(limits).some(([key, [min, max]]) =>
           !Number.isFinite(values[key]) || values[key] < min || values[key] > max)) {
         res.statusCode = 400; return res.end('{}');
       }
-      for (const [key, max, fallback] of [['maxYaw', 90, 42], ['maxPitch', 45, 8], ['eyeOpening', 120, 100], ['audioMouthOpening', 200, 100]]) {
+      for (const [key, max, fallback] of [['maxYaw', 90, 42], ['maxPitch', 45, 8], ['eyeOpening', 120, 100], ['audioMouthOpening', 300, 100]]) {
         const value = values[key] ?? fallback;
         if (!Number.isFinite(value) || value < 0 || value > max) {
           res.statusCode = 400; return res.end('{}');
         }
         values[key] = value;
         limits[key] = [0, max];
+      }
+      for (const key of ['livePitchTrim', 'autoPitchTrim']) {
+        const value = values[key] ?? 0;
+        if (!Number.isFinite(value) || value < -10 || value > 10) {
+          res.statusCode = 400; return res.end('{}');
+        }
+        values[key] = value;
+        limits[key] = [-10, 10];
       }
       settings[mode] = Object.fromEntries(Object.keys(limits).map(key => [key, values[key]]));
       await fs.mkdir(path.dirname(file), { recursive: true });

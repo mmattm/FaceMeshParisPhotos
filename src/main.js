@@ -16,7 +16,9 @@ import { AnimationLibrary } from './core/animationLibrary.js';
 import { VisitorDetector } from './core/visitorDetector.js';
 import { VisitorIdentity } from './core/visitorIdentity.js';
 import { FaceRecognition } from './core/faceRecognition.js';
-import { isFaceInsideOutput, getDepartureBlend } from './core/outputFaceBounds.js';
+import { LiveFaceTextureGate } from './core/liveFaceTextureGate.js';
+import { FaceProximityGate } from './core/faceProximityGate.js';
+import { StableRecognitionStatus } from './ui/stableRecognitionStatus.js';
 import { createFallbackFaceLandmarks } from './core/fallbackFace.js';
 import { CanvasBroadcaster } from './webrtc/canvasBroadcaster.js';
 import { MotionPresetRecorder } from './mocap/motionPresetRecorder.js';
@@ -27,6 +29,7 @@ import { AudioLibraryControls } from './ui/audioLibraryControls.js';
 class App {
   constructor() {
     this.videoEl = document.getElementById('webcam-video');
+    this.webcamPreviewEl = document.getElementById('webcam-preview-video');
     this.canvasEl = document.getElementById('output-canvas');
     this.loadingOverlay = document.getElementById('loading-overlay');
     this.loadingText = document.getElementById('loading-text');
@@ -34,6 +37,12 @@ class App {
     // Modules
     this.camera = new CameraManager(this.videoEl);
     this.tracker = new FaceTracker({ smoothing: true });
+    this.liveFaceTextureGate = new LiveFaceTextureGate();
+    this.faceProximityGate = new FaceProximityGate();
+    try {
+      const saved = localStorage.getItem('photomaton_min_face_height_percent_v2');
+      if (saved !== null) this.faceProximityGate.setThresholdPercent(saved);
+    } catch { /* Keep the default distance threshold. */ }
     this.renderer = new FaceMeshRenderer(this.canvasEl, this.videoEl);
     this.looper = new ExpressionLooper();
     this.autoCalibrator = new AutoCalibrator(this.looper);
@@ -56,17 +65,28 @@ class App {
       absenceMs: savedVisitorAbsence === null ? 3000 : Number(savedVisitorAbsence)
     });
     const recognition = new FaceRecognition();
+    const recognitionStatus = new StableRecognitionStatus();
     this.visitorIdentity = new VisitorIdentity({
       describe: (video, tracking) => recognition.describe(video, tracking),
       onNewVisitor: detail => {
         if (detail.reason !== 'MANUAL_REFERENCE') this.handleNewVisitor(detail);
       },
+      onSameVisitor: () => {
+        this.showNotification('Même visiteur reconnu · session conservée',
+          'success', 15000, 'visitor-same');
+      },
       onStatus: (status, distance, error) => {
+        const displayedStatus = recognitionStatus.update(status, performance.now());
+        const absenceSlider = document.getElementById('slider-visitor-absence');
+        if (absenceSlider) absenceSlider.disabled = this.visitorIdentity.enabled;
         const button = document.getElementById('btn-visitor-identity');
         const labels = { checking: 'comparaison…', ready: 'active', same: 'même visiteur',
-          new: 'nouveau confirmé', uncertain: 'à confirmer', error: 'indisponible', disabled: 'désactivée' };
+          new: 'nouveau confirmé', uncertain: 'à confirmer', error: 'indisponible', disabled: 'désactivée',
+          tooFar: 'rapprochez-vous', stabilizing: 'stabilisation', waiting: 'en attente de visage',
+          position: 'visage de face et entier', paused: 'pause pendant le rendu' };
         if (button) {
-          button.textContent = `Reconnaissance : ${labels[status]}`;
+          const label = `Reconnaissance : ${labels[displayedStatus]}`;
+          if (button.textContent !== label) button.textContent = label;
           button.classList.toggle('active', this.visitorIdentity.enabled);
           button.setAttribute('aria-pressed', String(this.visitorIdentity.enabled));
           button.title = distance == null ? 'Comparer au dernier visiteur, uniquement en mémoire'
@@ -79,10 +99,17 @@ class App {
         }
       }
     });
+    try {
+      const savedReset = localStorage.getItem('photomaton_visitor_identity_reset_ms');
+      if (savedReset !== null) this.visitorIdentity.setAbsenceResetMs(savedReset);
+    } catch { /* Keep the default one-minute reset. */ }
     this.visitorDetector.addEventListener('new-visitor', (e) => {
-      if (!this.isVisitorDetectionBlocked()) this.visitorIdentity.request(e.detail);
+      if (!this.isVisitorDetectionBlocked() && !this.visitorIdentity.enabled) {
+        this.handleNewVisitor(e.detail);
+      }
     });
     this.visitorDetector.addEventListener('absence-complete', () => {
+      if (this.visitorIdentity.enabled) return;
       this.showNotification('Absence terminée · prêt pour le prochain visiteur', 'success', 3500, 'visitor-absence');
     });
     this.canvasBroadcaster = new CanvasBroadcaster(this.canvasEl, {
@@ -282,6 +309,7 @@ class App {
         return;
       }
       this.forceAutonomousMode = !this.forceAutonomousMode;
+      if (this.audioLibrary) this.audioLibrary.testPlayback = null;
       btnAutonomous.classList.toggle('active', this.forceAutonomousMode);
       if (this.forceAutonomousMode) {
         if (this.canUseAutonomous()) {
@@ -317,28 +345,6 @@ class App {
         }
         this.setState('LIVE');
       }
-    });
-
-    const fallbackTest = document.getElementById('btn-test-fallback');
-    fallbackTest?.addEventListener('click', () => {
-      if (this.presetRecorder.isRecording) {
-        this.showNotification("Arrêtez d'abord l'enregistrement du preset.");
-        return;
-      }
-      if (!this.forceFallbackFace) {
-        this.autonomousBeforeFallbackTest = this.forceAutonomousMode;
-        this.forceFallbackFace = true;
-        if (!this.forceAutonomousMode) btnAutonomous?.click();
-        this.applyBestTextureReference(performance.now(), 0, true);
-        this.setState('AUTONOMOUS');
-        this.autonomousEngine.startAutonomous(performance.now(), null, null);
-      } else {
-        this.forceFallbackFace = false;
-        this.applyBestTextureReference(performance.now(), 0, true);
-        this.autonomousEngine.startAutonomous(performance.now(), null, null);
-        if (!this.autonomousBeforeFallbackTest && this.forceAutonomousMode) btnAutonomous?.click();
-      }
-      this.syncFaceTextureButton();
     });
 
     // Keep the bust composition in live and autonomous states.
@@ -448,6 +454,30 @@ class App {
 
     // 6. Absence duration before starting a new visit.
     const sliderVisitorSens = document.getElementById('slider-visitor-absence');
+    const identityResetInput = document.getElementById('visitor-identity-reset-seconds');
+    if (identityResetInput) {
+      identityResetInput.value = String(this.visitorIdentity.absenceResetMs / 1000);
+      identityResetInput.addEventListener('change', () => {
+        this.visitorIdentity.setAbsenceResetMs(Number(identityResetInput.value) * 1000);
+        identityResetInput.value = String(this.visitorIdentity.absenceResetMs / 1000);
+        try {
+          localStorage.setItem('photomaton_visitor_identity_reset_ms', String(this.visitorIdentity.absenceResetMs));
+        } catch { /* Keep the setting for this session. */ }
+      });
+    }
+    const faceSizeSlider = document.getElementById('slider-min-face-size');
+    const faceSizeLabel = document.getElementById('val-min-face-size');
+    if (faceSizeSlider) {
+      faceSizeSlider.value = this.faceProximityGate.thresholdPercent;
+      if (faceSizeLabel) faceSizeLabel.textContent = `${this.faceProximityGate.thresholdPercent}%`;
+      faceSizeSlider.addEventListener('input', event => {
+        this.faceProximityGate.setThresholdPercent(event.target.value);
+        if (faceSizeLabel) faceSizeLabel.textContent = `${this.faceProximityGate.thresholdPercent}%`;
+        try {
+          localStorage.setItem('photomaton_min_face_height_percent_v2', String(this.faceProximityGate.thresholdPercent));
+        } catch { /* Keep the setting for this session. */ }
+      });
+    }
     const visitorSensValLabel = document.getElementById('visitor-absence-val-label');
     const currentSens = this.visitorDetector.absenceMs / 1000;
     if (sliderVisitorSens) {
@@ -591,11 +621,11 @@ class App {
 
     this.isAlignModeActive = false;
 
-    const offset = { x: 0, y: 0, pitch: 0, yaw: 0, roll: 0, zoom: 1.0, maxYaw: 42, maxPitch: 8, eyeOpening: 100, audioMouthOpening: 100 };
+    const offset = { x: 0, y: 0, pitch: 0, yaw: 0, roll: 0, zoom: 1.0, maxYaw: 42, maxPitch: 8, eyeOpening: 100, audioMouthOpening: 100, livePitchTrim: 0, autoPitchTrim: 0 };
     const profiles = new CameraAlignmentProfiles(this.renderer, localStorage, this.projectAlignmentSettings);
 
     const updateSaveStatus = () => {
-      const current = this.renderer.getCameraOffset();
+      const current = profiles.getEditingOffset();
       const savedOffset = profiles.saved;
       const unchanged = savedOffset && Object.keys(offset).every(key => Math.abs(current[key] - savedOffset[key]) < 0.000001);
       if (saveStatus) saveStatus.textContent = unchanged ? 'Réglage enregistré' : 'Cliquez sur Save pour mémoriser';
@@ -606,7 +636,7 @@ class App {
       try {
         await profiles.save();
         updateSaveStatus();
-        this.showNotification(`Align 3D · ${ALIGNMENT_PROFILE_LABELS[profiles.active]} enregistré`, 'success', 2500, 'camera-alignment');
+        this.showNotification(`Align 3D · ${ALIGNMENT_PROFILE_LABELS[profiles.editingMode]} enregistré`, 'success', 2500, 'camera-alignment');
       } catch {
         if (saveStatus) saveStatus.textContent = 'Enregistrement indisponible sur ce navigateur';
         this.showNotification('Impossible de mémoriser l’alignement 3D', 'error', 3500, 'camera-alignment');
@@ -616,8 +646,8 @@ class App {
     });
 
     const updateUIFromState = () => {
-      const cur = this.renderer.getCameraOffset();
-      for (const key of ['maxYaw', 'maxPitch', 'eyeOpening', 'audioMouthOpening']) {
+      const cur = profiles.getEditingOffset();
+      for (const key of ['maxYaw', 'maxPitch', 'eyeOpening', 'audioMouthOpening', 'livePitchTrim', 'autoPitchTrim']) {
         const slider = document.getElementById('slider-cam-' + key);
         const label = document.getElementById('val-cam-' + key);
         if (slider) slider.value = cur[key];
@@ -645,13 +675,17 @@ class App {
 
     this.syncAlignProfile = () => {
       const mode = this.minimalistMode ? 'minimalist'
-        : 'autonomous_bust';
+        : this.appState === 'AUTONOMOUS' ? 'autonomous_bust' : 'live_bust';
       profiles.activate(mode);
       const label = document.getElementById('align-profile-label');
-      if (label) label.textContent = `Profil : ${ALIGNMENT_PROFILE_LABELS[mode]}`;
-      if (btnSaveCam) btnSaveCam.title = `Enregistrer Align 3D pour ${ALIGNMENT_PROFILE_LABELS[mode]}`;
+      if (label) label.textContent = `Profil : ${ALIGNMENT_PROFILE_LABELS[profiles.editingMode]}`;
+      if (btnSaveCam) btnSaveCam.title = `Enregistrer Align 3D pour ${ALIGNMENT_PROFILE_LABELS[profiles.editingMode]}`;
       updateUIFromState();
     };
+    document.getElementById('align-profile-select')?.addEventListener('change', event => {
+      profiles.edit(event.target.value || null);
+      this.syncAlignProfile();
+    });
     this.syncAlignProfile();
 
     // Toggle Align Mode
@@ -678,7 +712,7 @@ class App {
     if (sliderCamX) {
       sliderCamX.addEventListener('input', (e) => {
         const val = parseFloat(e.target.value);
-        this.renderer.setCameraOffset({ x: val });
+        profiles.setEditingOffset({ x: val });
         if (valCamX) valCamX.textContent = `${Math.round(val)}px`;
         updateSaveStatus();
       });
@@ -687,7 +721,7 @@ class App {
     if (sliderCamY) {
       sliderCamY.addEventListener('input', (e) => {
         const val = parseFloat(e.target.value);
-        this.renderer.setCameraOffset({ y: val });
+        profiles.setEditingOffset({ y: val });
         if (valCamY) valCamY.textContent = `${Math.round(val)}px`;
         updateSaveStatus();
       });
@@ -696,7 +730,7 @@ class App {
     if (sliderCamPitch) {
       sliderCamPitch.addEventListener('input', (e) => {
         const val = parseFloat(e.target.value);
-        this.renderer.setCameraOffset({ pitch: val });
+        profiles.setEditingOffset({ pitch: val });
         if (valCamPitch) valCamPitch.textContent = `${val.toFixed(1)}°`;
         updateSaveStatus();
       });
@@ -705,7 +739,7 @@ class App {
     if (sliderCamYaw) {
       sliderCamYaw.addEventListener('input', (e) => {
         const val = parseFloat(e.target.value);
-        this.renderer.setCameraOffset({ yaw: val });
+        profiles.setEditingOffset({ yaw: val });
         if (valCamYaw) valCamYaw.textContent = `${val.toFixed(1)}°`;
         updateSaveStatus();
       });
@@ -714,7 +748,7 @@ class App {
     if (sliderCamRoll) {
       sliderCamRoll.addEventListener('input', (e) => {
         const val = parseFloat(e.target.value);
-        this.renderer.setCameraOffset({ roll: val });
+        profiles.setEditingOffset({ roll: val });
         if (valCamRoll) valCamRoll.textContent = `${val.toFixed(1)}°`;
         updateSaveStatus();
       });
@@ -724,15 +758,15 @@ class App {
       sliderCamZoom.addEventListener('input', (e) => {
         const pct = parseFloat(e.target.value);
         const z = pct / 100.0;
-        this.renderer.setCameraOffset({ zoom: z });
+        profiles.setEditingOffset({ zoom: z });
         if (valCamZoom) valCamZoom.textContent = `${Math.round(pct)}%`;
         updateSaveStatus();
       });
     }
 
-    for (const key of ['maxYaw', 'maxPitch', 'eyeOpening', 'audioMouthOpening']) {
+    for (const key of ['maxYaw', 'maxPitch', 'eyeOpening', 'audioMouthOpening', 'livePitchTrim', 'autoPitchTrim']) {
       document.getElementById('slider-cam-' + key)?.addEventListener('input', event => {
-        this.renderer.setCameraOffset({ [key]: Number(event.target.value) });
+        profiles.setEditingOffset({ [key]: Number(event.target.value) });
         updateUIFromState();
       });
     }
@@ -740,7 +774,7 @@ class App {
     resetButtons.forEach(btn => {
       btn.addEventListener('click', () => {
         const axis = btn.dataset.axis;
-        const cur = this.renderer.getCameraOffset();
+        const cur = profiles.getEditingOffset();
         if (axis === 'x') cur.x = 0;
         else if (axis === 'y') cur.y = 0;
         else if (axis === 'pitch') cur.pitch = 0;
@@ -751,7 +785,8 @@ class App {
         else if (axis === 'maxPitch') cur.maxPitch = 8;
         else if (axis === 'eyeOpening') cur.eyeOpening = 100;
         else if (axis === 'audioMouthOpening') cur.audioMouthOpening = 100;
-        this.renderer.setCameraOffset(cur);
+        else if (axis === 'livePitchTrim' || axis === 'autoPitchTrim') cur[axis] = 0;
+        profiles.setEditingOffset(cur);
         updateUIFromState();
         updateSaveStatus();
       });
@@ -760,7 +795,7 @@ class App {
     // Reset All
     if (btnResetCamAll) {
       btnResetCamAll.addEventListener('click', () => {
-        this.renderer.resetCameraOffset();
+        profiles.setEditingOffset(offset);
         updateUIFromState();
       });
     }
@@ -787,7 +822,7 @@ class App {
         startY = e.clientY;
         // Shift key or Right click (button 2) triggers 2D displacement (Pan X / Y)
         isPanMode = e.shiftKey || (e.button === 2);
-        initialOffset = this.renderer.getCameraOffset();
+        initialOffset = profiles.getEditingOffset();
         alignOverlay.classList.add('dragging');
       });
 
@@ -807,7 +842,7 @@ class App {
           const sens = 1.0;
           const newX = Math.round(initialOffset.x + deltaX * sens);
           const newY = Math.round(initialOffset.y - deltaY * sens);
-          this.renderer.setCameraOffset({
+          profiles.setEditingOffset({
             x: Math.max(-300, Math.min(300, newX)),
             y: Math.max(-300, Math.min(300, newY))
           });
@@ -816,7 +851,7 @@ class App {
           const sens = 0.25;
           const newYaw = Number((initialOffset.yaw + deltaX * sens).toFixed(1));
           const newPitch = Number((initialOffset.pitch - deltaY * sens).toFixed(1));
-          this.renderer.setCameraOffset({
+          profiles.setEditingOffset({
             yaw: Math.max(-45, Math.min(45, newYaw)),
             pitch: Math.max(-45, Math.min(45, newPitch))
           });
@@ -836,10 +871,10 @@ class App {
       // Mouse wheel to zoom
       alignOverlay.addEventListener('wheel', (e) => {
         e.preventDefault();
-        const cur = this.renderer.getCameraOffset();
+        const cur = profiles.getEditingOffset();
         const zoomDelta = e.deltaY > 0 ? -0.05 : 0.05;
         const newZoom = Math.max(0.5, Math.min(2.0, Number((cur.zoom + zoomDelta).toFixed(2))));
-        this.renderer.setCameraOffset({ zoom: newZoom });
+        profiles.setEditingOffset({ zoom: newZoom });
         updateUIFromState();
         updateSaveStatus();
       }, { passive: false });
@@ -1466,6 +1501,7 @@ class App {
             this.setState('AUTONOMOUS');
             this.autonomousEngine.startAutonomous(performance.now(), this.lastTrackingLandmarks, this.lastTrackingHeadPose);
           }
+          if (this.audioLibrary) this.audioLibrary.testPlayback = null;
           this.forceAutonomousMode = true;
           document.getElementById('btn-toggle-autonomous')?.classList.add('active');
           this.autonomousEngine.playAnimation(fullAnim, performance.now());
@@ -1518,33 +1554,47 @@ class App {
 
     const loop = () => {
       const now = performance.now();
+      // Reuse the active camera stream, including after a camera switch or stop.
+      if (this.webcamPreviewEl && this.webcamPreviewEl.srcObject !== this.videoEl.srcObject) {
+        this.webcamPreviewEl.srcObject = this.videoEl.srcObject;
+        if (this.videoEl.srcObject) {
+          void this.webcamPreviewEl.play().catch(error => console.warn('Webcam preview:', error));
+        }
+      }
+      this.audioLibrary?.updateTestPlayback();
 
       // 1. MediaPipe Frame Inference
       const cameraAvailable = this.camera.isStreaming
         && this.camera.stream?.getVideoTracks().some(track => track.readyState === 'live' && !track.muted);
-      const rawTracking = cameraAvailable ? this.tracker.processVideoFrame(this.videoEl, now) : null;
+      const rawTracking = this.faceProximityGate.filter(
+        cameraAvailable ? this.tracker.processVideoFrame(this.videoEl, now) : null, now);
+      const faceSizeStatus = document.getElementById('face-size-status');
+      if (faceSizeStatus) {
+        const percent = Math.round(this.faceProximityGate.faceHeightPercent || 0);
+        faceSizeStatus.textContent = percent ? `${percent}%${rawTracking?.tooFar ? ' · rapprochez-vous'
+          : rawTracking?.proximityPending ? ' · stabilisation' : ''}` : 'Aucun visage';
+      }
+      this.liveFaceTextureGate.update(rawTracking, now);
+      // Tracking remains live regardless of which portrait is displayed.
+      if (rawTracking?.detected) {
+        this.lastTrackingLandmarks = rawTracking.landmarks.map(p => ({ ...p }));
+        this.lastTrackingHeadPose = rawTracking.headPose ? { ...rawTracking.headPose } : null;
+        this.autonomousEngine.updateLiveFace(rawTracking);
+      }
 
       const isTracked = Boolean(rawTracking?.detected && !this.forceAutonomousMode);
-      const { renderW, renderH } = this.renderer.getVideoMetrics();
-      this.departureBlendWeight = isTracked ? getDepartureBlend(rawTracking.landmarks,
-        renderW, renderH, this.renderer.canvasWidth, this.renderer.canvasHeight,
-        this.canvasBroadcaster?.outputWidth || 1080, this.canvasBroadcaster?.outputHeight || 1080) : 1;
-      // Leave live mode before the face is clipped by the square broadcast crop.
-      // Require more clearance when returning, so boundary jitter cannot toggle modes.
-      const isVisitorInFrame = Boolean(rawTracking?.detected) && isFaceInsideOutput(
-        rawTracking.landmarks, renderW, renderH,
-        this.renderer.canvasWidth, this.renderer.canvasHeight,
-        this.canvasBroadcaster?.outputWidth || 1080,
-        this.canvasBroadcaster?.outputHeight || 1080,
-        this.appState === 'AUTONOMOUS' ? 0.06 : 0.02
-      );
+      this.departureBlendWeight = isTracked ? 0 : 1;
+      // Presence covers the full camera image, independently of the square output.
+      const isVisitorInFrame = Boolean(rawTracking?.detected && rawTracking.landmarks?.length);
       const isFacePresent = isVisitorInFrame && !this.forceAutonomousMode;
 
-      // Use the same visible zone for live rendering and the absence timer.
+      // Use full-camera detection for tracking, recognition and the absence timer.
       // Forcing autonomous playback alone must not count as a visitor leaving.
       this.visitorDetector.update(isVisitorInFrame ? rawTracking : null, now);
       if (!this.isVisitorDetectionBlocked()) {
-        void this.visitorIdentity.observe(isVisitorInFrame ? rawTracking : null, this.videoEl, now);
+        void this.visitorIdentity.observe(rawTracking, this.videoEl, now);
+      } else if (this.visitorIdentity.enabled) {
+        this.visitorIdentity.onStatus('paused');
       }
       this.updateAutonomousAvailability();
 
@@ -1581,19 +1631,7 @@ class App {
         }
 
         // If a clean, unobstructed frontal frame is available, link it to the autonomous engine.
-        const bestCand = this.historyBuffer.bestOverallSnapshot;
-        if (this.useVisitorPortrait && bestCand && bestCand.landmarks) {
-          this.autonomousEngine.setBaseLandmarks(bestCand.landmarks);
-        }
 
-        // Save last known live landmarks and head pose for seamless handoff
-        this.lastTrackingLandmarks = rawTracking.landmarks.map(p => ({
-          x: p.x,
-          y: p.y,
-          z: p.z || 0,
-          visibility: p.visibility
-        }));
-        this.lastTrackingHeadPose = rawTracking.headPose ? { ...rawTracking.headPose } : null;
 
         // Continuously buffer current frame in fallback canvas
         const vw = this.videoEl.videoWidth || 1280;
@@ -1604,9 +1642,6 @@ class App {
         }
         this.lastFaceCtx.drawImage(this.videoEl, 0, 0, vw, vh);
 
-        // Feed live face orientation to autonomous gaze engine
-        this.autonomousEngine.updateLiveFace(rawTracking);
-
         // Auto-calibrator updates
         this.autoCalibrator.update(rawTracking, now);
 
@@ -1615,10 +1650,12 @@ class App {
           this.presetRecorder.capture(rawTracking, now);
         }
 
-        // Live mode uses only the current camera FaceMesh and video texture.
+        // Live tracking drives either the visitor texture or the fallback portrait.
         this.isBlendingToLive = false;
         this.autoExitLandmarks = null;
         if (this.renderer.isTextureFrozen) this.renderer.unfreezeFaceTexture();
+        this.renderer.setAutonomousFallback(!this.liveFaceTextureGate.allowed
+          || !this.renderer.videoTexture || this.videoEl.readyState < 2);
         const renderResult = { ...rawTracking, liveTexturePreferred: true };
         this.lastRenderedTrackingResult = renderResult;
         this.renderer.render(renderResult);
@@ -1677,6 +1714,9 @@ class App {
       }
 
       this.updateAnimationPlaybackUI();
+      if (statLatency && rawTracking?.latencyMs) {
+        statLatency.textContent = `${Math.round(rawTracking.latencyMs)}ms`;
+      }
       this.updateMotionPresetRecorderUI(now);
 
       if (this.presetRecorder.isRecording && this.presetRecorder.getElapsedMs(now) >= this.presetRecorder.maxDurationMs) {
@@ -1735,32 +1775,9 @@ class App {
     };
   }
 
-  applyBestTextureReference(now = performance.now(), minAgeMs = 1500, refresh = false) {
+  applyBestTextureReference() {
     if (!this.canUseAutonomous()) return false;
-    if (this.forceFallbackFace) {
-      const { renderW, renderH } = this.renderer.getVideoMetrics();
-      this.fallbackFaceLandmarks = createFallbackFaceLandmarks(renderW / Math.max(1, renderH),
-        this.renderer.fallbackTextureLandmarks, this.renderer.fallbackTextureAspectRatio);
-      this.renderer.setAutonomousFallback(true);
-      this.autonomousEngine.setBaseLandmarks(this.fallbackFaceLandmarks);
-      return true;
-    }
-    // Reuse the exact displayed portrait on departure instead of picking another shot.
-    if (!refresh && this.historyBuffer.hasCurrentVisitorSnapshot()
-      && this.renderer.isTextureFrozen && this.renderer.frozenLandmarks) {
-      this.renderer.setAutonomousFallback(false);
-      return true;
-    }
-    const backupFrame = this.historyBuffer.hasCurrentVisitorSnapshot()
-      ? this.historyBuffer.getBestVisitorBackupFrame(now, minAgeMs) : null;
-    if (backupFrame && !backupFrame.isArchived && backupFrame.canvas && backupFrame.landmarks) {
-      const ageStr = (now - backupFrame.timestamp).toFixed(0);
-      console.log(`[FaceTextureHistoryBuffer] 🎭 Texture autonome de référence appliquée (Âge: ${ageStr}ms, Score: ${Math.round(backupFrame.qualityScore)})`);
-      this.renderer.setAutonomousFallback(false);
-      this.renderer.freezeFaceTexture(backupFrame.canvas, backupFrame.landmarks);
-      this.autonomousEngine.setBaseLandmarks(backupFrame.landmarks);
-      return true;
-    }
+    // Autonomous portraits always use the generic face, never visitor snapshots.
     const { renderW, renderH } = this.renderer.getVideoMetrics();
     this.fallbackFaceLandmarks = createFallbackFaceLandmarks(renderW / Math.max(1, renderH),
       this.renderer.fallbackTextureLandmarks, this.renderer.fallbackTextureAspectRatio);
@@ -1813,16 +1830,21 @@ class App {
 
   syncFaceTextureButton() {
     const fallbackTest = document.getElementById('btn-test-fallback');
-    fallbackTest?.classList.toggle('active', !!this.forceFallbackFace);
-    fallbackTest?.setAttribute('aria-pressed', String(!!this.forceFallbackFace));
-    if (fallbackTest) fallbackTest.textContent = this.forceFallbackFace ? 'Test fallback : actif' : 'Test fallback';
+    const fallback = this.appState === 'AUTONOMOUS' || this.renderer.autonomousFallback;
+    fallbackTest?.classList.toggle('active', fallback);
+    fallbackTest?.setAttribute('aria-pressed', String(fallback));
+    if (fallbackTest) {
+      fallbackTest.disabled = true;
+      fallbackTest.textContent = fallback ? 'Visage : fallback' : 'Visage : FaceMesh';
+      fallbackTest.title = 'Live : FaceMesh si disponible. Autonome : fallback. Transition en fondu.';
+    }
     const button = document.getElementById('btn-toggle-face-texture');
     if (!button) return;
     const hasSnapshot = this.historyBuffer.hasCurrentVisitorSnapshot();
     const autonomous = this.appState === 'AUTONOMOUS';
-    const captured = autonomous && hasSnapshot && !this.forceFallbackFace;
+    const captured = autonomous && hasSnapshot && !fallback;
     button.disabled = true;
-    button.textContent = autonomous && (!hasSnapshot || this.forceFallbackFace) ? 'Texture : fallback'
+    button.textContent = fallback || autonomous && !hasSnapshot ? 'Texture : fallback'
       : captured ? 'Texture : FaceMesh' : 'Texture : Live';
     button.setAttribute('aria-pressed', String(captured));
     button.classList.toggle('active', captured);
@@ -1838,7 +1860,6 @@ class App {
     const { landmarks, score } = detail;
     console.log(`[FaceTextureHistoryBuffer] 🌟 Meilleure référence faciale capturée ! (Score: ${Math.round(score)})`);
     if (landmarks) {
-      if (!this.forceFallbackFace) this.autonomousEngine.setBaseLandmarks(landmarks);
       this.showNotification(this.hasVisitorSnapshot
         ? 'Meilleur cliché FaceMesh mémorisé'
         : 'Cliché FaceMesh mémorisé', 'success', 5000, 'facemesh-capture');
@@ -1866,6 +1887,8 @@ class App {
     // Continue tracking presence, but ignore new visits during the current
     // minimalist render and its one-second video-return delay.
     if (this.isVisitorDetectionBlocked()) return;
+    this.showNotification(detail.identityConfirmed ? 'Nouveau visiteur reconnu'
+      : 'Nouveau visiteur détecté', 'success', 15000, 'visitor-new');
     // Invalidate old render monitors immediately, before the one-second delay.
     this.comfyCallId++;
     if (this.comfySettings.enabled && this.comfySettings.baseUrl) {
@@ -1973,7 +1996,8 @@ class App {
     const wasAutonomous = this.appState === 'AUTONOMOUS';
     if (newState !== 'AUTONOMOUS') {
       this.forceFallbackFace = false;
-      this.renderer.setAutonomousFallback(false);
+      this.renderer.setAutonomousFallback(!this.liveFaceTextureGate.allowed
+        || !this.renderer.videoTexture || this.videoEl.readyState < 2);
     }
     this.appState = newState;
     if (wasAutonomous && newState !== 'AUTONOMOUS') this.autonomousEngine.stopAutonomous();

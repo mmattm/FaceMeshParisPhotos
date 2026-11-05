@@ -7,9 +7,9 @@
   <title>SoftPhotography - Photobooth</title>
   <meta name="description"
     content="Studio-grade Anatomical Lip-Sync & Neural Voice Synthesis with real-time head retargeting">
-  <script type="module" crossorigin src="/assets/main-B5hFhwxK.js"></script>
+  <script type="module" crossorigin src="/assets/main-CV3cEQvD.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/modulepreload-polyfill-B5Qt9EMX.js">
-  <link rel="stylesheet" crossorigin href="/assets/main-C5ML1KL1.css">
+  <link rel="stylesheet" crossorigin href="/assets/main-BZoNjJ1g.css">
 </head>
 
 <body class="show-webcam show-texture">
@@ -193,6 +193,11 @@
 
     </header>
 
+    <aside class="webcam-preview-card" aria-label="Aperçu du flux webcam">
+      <div class="webrtc-preview-header"><span>WEBCAM</span></div>
+      <video id="webcam-preview-video" autoplay playsinline muted aria-label="Flux webcam en direct"></video>
+    </aside>
+
     <aside class="webrtc-preview-card" aria-label="Aperçu de la sortie vidéo WebRTC">
       <div class="webrtc-preview-header">
         <span><span class="webrtc-preview-live-dot"></span> VIDEO OUT</span>
@@ -246,6 +251,14 @@
       </div>
 
       <div class="align-panel-body">
+        <label for="align-profile-select">Réglages à modifier</label>
+        <select id="align-profile-select" class="tool-btn">
+          <option value="">Mode affiché (automatique)</option>
+          <option value="live_bust">Buste live</option>
+          <option value="autonomous_bust">Buste autonome</option>
+          <option value="minimalist">Minimaliste</option>
+        </select>
+        <p>Les réglages du mode choisi seront appliqués à son activation. Le zoom reste commun.</p>
         <p id="align-profile-label" role="status">Profil : Live</p>
         <!-- Déplacement Position X / Y -->
         <div class="align-section">
@@ -327,11 +340,28 @@
           <div class="align-section-header"><span class="align-section-title">Bouche automatique (Audio)</span></div>
           <div class="align-control-row">
             <label for="slider-cam-audioMouthOpening" class="align-label">Ouverture</label>
-            <input type="range" id="slider-cam-audioMouthOpening" class="blend-slider align-slider" min="0" max="200" step="1" value="100" aria-describedby="audio-mouth-opening-help">
+            <input type="range" id="slider-cam-audioMouthOpening" class="blend-slider align-slider" min="0" max="300" step="1" value="100" aria-describedby="audio-mouth-opening-help">
             <span id="val-cam-audioMouthOpening" class="align-val">100%</span>
             <button class="align-btn-reset" data-axis="audioMouthOpening" title="R&#233;initialiser l'ouverture de la bouche">&#8634;</button>
           </div>
           <p id="audio-mouth-opening-help">Pendant la lecture audio : 0% d&#233;sactive l'ouverture, 100% conserve l'amplitude actuelle.</p>
+        </div>
+
+        <div class="align-section">
+          <div class="align-section-header"><span class="align-section-title">Correction haut / bas par mode</span></div>
+          <div class="align-control-row">
+            <label for="slider-cam-livePitchTrim" class="align-label">Live</label>
+            <input type="range" id="slider-cam-livePitchTrim" class="blend-slider align-slider" min="-10" max="10" step="0.1" value="0">
+            <span id="val-cam-livePitchTrim" class="align-val">0°</span>
+            <button class="align-btn-reset" data-axis="livePitchTrim" title="Réinitialiser la correction Live">↺</button>
+          </div>
+          <div class="align-control-row">
+            <label for="slider-cam-autoPitchTrim" class="align-label">Autonome</label>
+            <input type="range" id="slider-cam-autoPitchTrim" class="blend-slider align-slider" min="-10" max="10" step="0.1" value="0">
+            <span id="val-cam-autoPitchTrim" class="align-val">0°</span>
+            <button class="align-btn-reset" data-axis="autoPitchTrim" title="Réinitialiser la correction autonome">↺</button>
+          </div>
+          <p>Petite correction ajoutée à l’inclinaison générale. 0° conserve le cadrage actuel.</p>
         </div>
 
         <!-- Zoom / Échelle -->
@@ -434,12 +464,25 @@
             <span id="expression-intensity-value">160%</span>
           </label>
           <div class="blend-control"
-            title="Une nouvelle visite démarre au retour après cette durée sans visage (défaut : 3 secondes)">
-            <span>Absence visiteur:</span>
-            <input type="range" id="slider-visitor-absence" class="blend-slider" min="1" max="10" value="3"
+            title="Délai utilisé uniquement si la reconnaissance est désactivée (défaut : 3 secondes)">
+            <span>Absence (sans reconnaissance):</span>
+            <input type="range" id="slider-visitor-absence" class="blend-slider" min="1" max="10" value="3" disabled
               style="width: 65px;">
             <span id="visitor-absence-val-label" style="min-width: 28px;">3 s</span>
           </div>
+          <label class="blend-control" for="slider-min-face-size"
+            title="Hauteur minimale du visage dans toute l’image webcam. Augmenter pour ignorer les personnes éloignées.">
+            <span>Visage minimum :</span>
+            <input type="range" id="slider-min-face-size" class="blend-slider" min="5" max="70" step="1" value="40" style="width:85px;">
+            <span id="val-min-face-size">40%</span>
+          </label>
+          <label class="blend-control" for="visitor-identity-reset-seconds"
+            title="Avec la reconnaissance active : oublier le dernier visage après cette absence continue. Le prochain visage démarre une nouvelle visite, même pour la même personne. 0 désactive ce reset.">
+            <span>Reset après absence :</span>
+            <input id="visitor-identity-reset-seconds" type="number" min="0" max="600" step="1" value="60" style="width: 60px;">
+            <span>s (0 = désactivé)</span>
+          </label>
+          <span id="face-size-status" class="mono-stat" role="status">Aucun visage</span>
           <details class="osc-dropdown">
             <summary class="tool-btn">OSC</summary>
             <div class="osc-dropdown-menu">
@@ -477,9 +520,9 @@
           Texture : FaceMesh
         </button>
 
-        <button id="btn-test-fallback" class="tool-btn" type="button" aria-pressed="false"
-          title="Tester le visage fallback en mode autonome, sans effacer le clich&#233; FaceMesh">
-          Test fallback
+        <button id="btn-test-fallback" class="tool-btn active" type="button" aria-pressed="true" disabled
+          title="Live : FaceMesh si disponible. Autonome : fallback. Transition en fondu.">
+          Visage : fallback
         </button>
 
         <button id="btn-toggle-autonomous" class="tool-btn" disabled
@@ -500,7 +543,7 @@
         </button>
 
         <button id="btn-toggle-minimalist" class="tool-btn" type="button" aria-pressed="false"
-          title="Points blancs du FaceMesh sur fond noir, sans image caméra ni buste, également en WebRTC">
+          title="Points noirs du FaceMesh sur fond blanc, sans image caméra ni buste, également en WebRTC">
           <span>⚪ Minimaliste</span>
         </button>
 

@@ -92,8 +92,8 @@
   },
   "459:456": {
     "inputs": {
-      "width": 768,
-      "height": 768,
+      "width": 640,
+      "height": 640,
       "batch_size": 1
     },
     "class_type": "EmptyLatentImage",
@@ -195,7 +195,7 @@
         0
       ],
       "negative_prompt": "",
-      "resolution": 768,
+      "resolution": 640,
       "clip": [
         "459:453",
         0

@@ -13,6 +13,7 @@ import { BustOverlayModel } from './bustOverlayModel.js';
 import { relaxEyelids } from './relaxedEyelids.js';
 import { lockLiveDepth } from './liveDepthLock.js';
 import { centerBustFrame } from './centerBustFrame.js';
+import { createTeethTexture } from './teethTexture.js';
 
 export class FaceMeshRenderer {
   constructor(canvasElement, videoElement = null) {
@@ -75,7 +76,7 @@ export class FaceMeshRenderer {
       pitch: 0,
       yaw: 0,
       roll: 0,
-      zoom: 1.0, maxYaw: 42, maxPitch: 8, eyeOpening: 100, audioMouthOpening: 100
+      zoom: 1.0, maxYaw: 42, maxPitch: 8, eyeOpening: 100, audioMouthOpening: 100, livePitchTrim: 0, autoPitchTrim: 0
     };
 
     this.camera = new THREE.OrthographicCamera(
@@ -470,7 +471,7 @@ if (uDepartureMix < 1.0) {
     this.landmarkGeometry.setAttribute('position', this.posAttribute);
     this.landmarkGeometry.setDrawRange(0, 0);
     this.landmarkMaterial = new THREE.PointsMaterial({
-      color: 0xffffff,
+      color: 0x000000,
       size: 4,
       sizeAttenuation: false,
       depthTest: false,
@@ -553,15 +554,17 @@ if (uDepartureMix < 1.0) {
     this.scene.add(this.mouthMesh);
 
     // Fine subdivisions give the incisors rounded tips and soft enamel shading.
-    this.mouthTeethSegments = 80;
+    this.mouthTeethSegments = 160;
     const rowVertices = (this.mouthTeethSegments + 1) * 2;
     this.mouthTeethPositions = new Float32Array(rowVertices * 2 * 3);
     const teethColors = new Float32Array(this.mouthTeethPositions.length);
+    const teethUvs = new Float32Array(rowVertices * 2 * 2);
     this.mouthTeethProfile = [];
     const teethGeometry = new THREE.BufferGeometry();
     this.mouthTeethAttribute = new THREE.BufferAttribute(this.mouthTeethPositions, 3);
     teethGeometry.setAttribute('position', this.mouthTeethAttribute);
     teethGeometry.setAttribute('color', new THREE.BufferAttribute(teethColors, 3));
+    teethGeometry.setAttribute('uv', new THREE.BufferAttribute(teethUvs, 2));
     const teethIndices = [];
     for (let row = 0; row < 2; row++) {
       for (let i = 0; i <= this.mouthTeethSegments; i++) {
@@ -572,16 +575,18 @@ if (uDepartureMix < 1.0) {
         const separation = Math.exp(-(Math.min(phase, 1 - phase) ** 2) / 0.003);
         // Upper incisors have short, almost straight edges rather than scalloped tips.
         const tipProfile = row === 0 ? 0.96 + roundTip * 0.04 : 0.85 + roundTip * 0.15;
-        const thickness = (row === 0 ? 0.10 : 0.065) * arch * tipProfile;
+        const thickness = (row === 0 ? 0.060 : 0.032) * arch * tipProfile;
         const inset = 0.015 * arch;
         this.mouthTeethProfile.push({ t, row, inset, thickness });
         for (let edge = 0; edge < 2; edge++) {
           const offset = (row * rowVertices + i * 2 + edge) * 3;
-          const shade = (0.94 + roundTip * 0.06) * (1 - separation * 0.10)
-            * (edge === 0 ? 0.82 : 1) * (row === 0 ? 1 : 0.82);
-          teethColors[offset] = 0.78 * shade;
-          teethColors[offset + 1] = 0.75 * shade;
-          teethColors[offset + 2] = 0.67 * shade;
+          const shade = (0.97 + roundTip * 0.03) * (1 - separation * 0.025);
+          teethColors[offset] = shade;
+          teethColors[offset + 1] = shade;
+          teethColors[offset + 2] = shade;
+          const uvOffset = (row * rowVertices + i * 2 + edge) * 2;
+          teethUvs[uvOffset] = t;
+          teethUvs[uvOffset + 1] = 1 - (row * 128 + 2 + edge * 124) / 256;
         }
         if (i < this.mouthTeethSegments) {
           const a = row * rowVertices + i * 2;
@@ -591,7 +596,7 @@ if (uDepartureMix < 1.0) {
     }
     teethGeometry.setIndex(teethIndices);
     this.mouthTeethMesh = new THREE.Mesh(teethGeometry, new THREE.MeshBasicMaterial({
-      color: 0xffffff, vertexColors: true, side: THREE.DoubleSide,
+      color: 0xffffff, map: createTeethTexture(), vertexColors: true, side: THREE.DoubleSide,
       transparent: true, depthTest: false, depthWrite: false, toneMapped: false
     }));
     this.mouthTeethMesh.renderOrder = 12;
@@ -604,7 +609,7 @@ if (uDepartureMix < 1.0) {
       && (this.mouthMesh.visible || this.fallbackMouthMesh.visible);
     if (!this.mouthTeethMesh.visible) return;
     const bustArticulation = this.showBust && this.isAutonomousActive;
-    this.mouthTeethMesh.material.color.setScalar(bustArticulation ? 1.10 : 1.06);
+    this.mouthTeethMesh.material.color.setScalar(0.98);
     const upper = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308];
     const lower = [78, 95, 88, 178, 87, 14, 317, 402, 318, 324, 308];
     const mouthWidth = Math.hypot(...[0, 1, 2].map(axis =>
@@ -623,12 +628,11 @@ if (uDepartureMix < 1.0) {
           + this.positions[opposite[i + 1] * 3 + axis] * blend;
       }
       const gap = Math.hypot(...rimPoint.map((value, axis) => oppositePoint[axis] - value));
-      const arch = Math.pow(Math.sin(Math.PI * t), 0.8);
-      // Small speech openings otherwise reduce teeth to a subpixel sliver.
-      // Keep a readable hint while reserving a black gap between both rows.
-      const toothGain = bustArticulation ? 1.50 : 1.20;
-      const toothFraction = Math.min(row === 0 ? 0.28 : 0.20,
-        Math.max(thickness * toothGain, mouthWidth * (row === 0 ? 0.010 : 0.007) * toothGain * arch / Math.max(gap, 0.001)));
+      // Crown height follows jaw width rather than shrinking with the aperture.
+      // Clip to the opening, reserving a dark gap and subtler lower teeth.
+      const toothGain = bustArticulation ? 1.15 : 1.0;
+      const toothFraction = Math.min(row === 0 ? 0.46 : 0.25,
+        mouthWidth * thickness * toothGain / Math.max(gap, 0.001));
         for (let axis = 0; axis < 3; axis++) {
           const edge = rimPoint[axis];
           const other = oppositePoint[axis];
@@ -871,7 +875,10 @@ if (uDepartureMix < 1.0) {
 
 
   setCameraOffset(offset = {}) {
-    for (const [key, max] of [['maxYaw', 90], ['maxPitch', 45], ['eyeOpening', 120], ['audioMouthOpening', 200]]) {
+    for (const key of ['livePitchTrim', 'autoPitchTrim']) {
+      if (Number.isFinite(offset[key])) this.cameraOffset[key] = Math.max(-10, Math.min(10, offset[key]));
+    }
+    for (const [key, max] of [['maxYaw', 90], ['maxPitch', 45], ['eyeOpening', 120], ['audioMouthOpening', 300]]) {
       if (Number.isFinite(offset[key])) this.cameraOffset[key] = Math.max(0, Math.min(max, offset[key]));
     }
     if (offset.x !== undefined) this.cameraOffset.x = Number(offset.x) || 0;
@@ -888,7 +895,7 @@ if (uDepartureMix < 1.0) {
   }
 
   resetCameraOffset() {
-    this.cameraOffset = { x: 0, y: 0, pitch: 0, yaw: 0, roll: 0, zoom: 1.0, maxYaw: 42, maxPitch: 8, eyeOpening: 100, audioMouthOpening: 100 };
+    this.cameraOffset = { x: 0, y: 0, pitch: 0, yaw: 0, roll: 0, zoom: 1.0, maxYaw: 42, maxPitch: 8, eyeOpening: 100, audioMouthOpening: 100, livePitchTrim: 0, autoPitchTrim: 0 };
     this.updateCameraTransform();
     return { ...this.cameraOffset };
   }
@@ -913,7 +920,8 @@ if (uDepartureMix < 1.0) {
     // -yaw: When yaw is positive (Droite), camera orbits RIGHT (+X) and looks from the right
     // roll: When roll is positive, camera rolls counter-clockwise so scene tilts clockwise
     const offsetEuler = new THREE.Euler(
-      THREE.MathUtils.degToRad(-pitch),
+      THREE.MathUtils.degToRad(-(pitch + (this.isAutonomousActive
+        ? this.cameraOffset.autoPitchTrim || 0 : this.cameraOffset.livePitchTrim || 0))),
       THREE.MathUtils.degToRad(-yaw),
       THREE.MathUtils.degToRad(roll),
       'YXZ'
@@ -949,7 +957,8 @@ if (uDepartureMix < 1.0) {
     const tx = Number(x) || 0;
     const ty = -(Number(y) || 0);
     const z = Math.max(0.1, Number(zoom) || 1.0);
-    const rx = -(Number(pitch) || 0);
+    const rx = -((Number(pitch) || 0) + (this.isAutonomousActive
+      ? this.cameraOffset.autoPitchTrim || 0 : this.cameraOffset.livePitchTrim || 0));
     const ry = Number(yaw) || 0;
     const rz = Number(roll) || 0;
 
@@ -1101,13 +1110,12 @@ if (uDepartureMix < 1.0) {
   }
 
   setupFallbackFaceGeometry() {
-    // Fill the eye openings with the aligned portrait instead of leaving holes
-    // through which the sculptural bust would hide the irises.
+    // Keep the eye apertures open for the animated, stencil-clipped 3D eyes.
     this.fallbackFaceGeometry = new THREE.BufferGeometry();
     this.fallbackFaceGeometry.setAttribute('position', this.posAttribute);
     this.fallbackFaceGeometry.setAttribute('uv', this.uvAttribute);
     this.fallbackFaceGeometry.setIndex([
-      ...this.geometry.index.array, ...this.eyeApertureGeometry.index.array
+      ...this.geometry.index.array
     ]);
     const mouthIndices = [];
     for (let i = 1; i < this.mouthRimIndices.length - 1; i++) {
@@ -1301,7 +1309,7 @@ if (uDepartureMix < 1.0) {
     }
     // Render the bust background into the canvas so OBS receives the same gray.
     const bustBackground = this.showBust && !this.minimalistMode;
-    this.renderer.setClearColor(bustBackground ? 0x242424 : 0x000000,
+    this.renderer.setClearColor(this.minimalistMode ? 0xffffff : bustBackground ? 0x242424 : 0x000000,
       (bustBackground || this.minimalistMode) ? 1 : 0);
     if (this.webcamBackgroundGroup) {
       this.webcamBackgroundGroup.visible = !this.autonomousFallback && !this.minimalistMode && !this.showBust && this.showWebcam && this.isAutonomousActive;
@@ -1310,7 +1318,7 @@ if (uDepartureMix < 1.0) {
     const showSurface = !this.minimalistMode
       && (this.autonomousFallback || this.faceMeshVisible);
     this.maskMesh.visible = showSurface;
-    this.eyeGroup.visible = showSurface && !this.autonomousFallback;
+    this.eyeGroup.visible = showSurface;
     if (this.landmarkPoints) this.landmarkPoints.visible = this.minimalistMode;
     if (this.eyeApertureMesh) {
       this.eyeApertureMesh.visible = this.eyeGroup.visible;
@@ -1319,7 +1327,7 @@ if (uDepartureMix < 1.0) {
       this.mouthMesh.visible = showSurface && this.isAutonomousActive && !this.autonomousFallback;
     }
     if (this.fallbackMouthMesh) {
-      this.fallbackMouthMesh.visible = showSurface && this.isAutonomousActive;
+      this.fallbackMouthMesh.visible = showSurface && (this.isAutonomousActive || this.autonomousFallback);
     }
     if (this.liveMouthMesh) {
       this.liveMouthMesh.material = this.isAutonomousActive
@@ -1353,7 +1361,7 @@ if (uDepartureMix < 1.0) {
     }
     this.scleraMaterial.color.setHex(0xf8f9fc);
     if (this.limbalMaterial) this.limbalMaterial.color.setHex(0x0c0e12);
-    this.irisMaterial.color.setHex(0x1a1c20);
+    this.irisMaterial.color.setHex(this.autonomousFallback ? 0x593b26 : 0x1a1c20);
     this.pupilMaterial.color.setHex(0x020204);
   }
 
@@ -1592,6 +1600,12 @@ if (uDepartureMix < 1.0) {
       return;
     }
 
+    const autonomous = !!trackingResult.isAutonomous;
+    if (this.isAutonomousActive !== autonomous) {
+      this.isAutonomousActive = autonomous;
+      this.updateCameraTransform();
+    }
+
     if (this.hasRenderedPortrait && !this.minimalistMode
       && this.lastRenderedFallback !== this.autonomousFallback) {
       this.beginPortraitCrossfade();
@@ -1611,12 +1625,11 @@ if (uDepartureMix < 1.0) {
       ? (trackingResult.departureTextureMix ?? 1) : 1;
     this.departureTextureUniforms.liveMap.value = this.videoTexture || null;
     const visitorBust = this.showBust && !this.autonomousFallback;
-    const baseEyelidReduction = visitorBust
-      ? (trackingResult.isAutonomous ? -0.08 : 0.08)
-      : (trackingResult.isAutonomous ? -0.22 : (this.showBust ? 0.14 : 0.22));
-    const profileEyelidReduction = trackingResult.isAutonomous
-      ? 1 - (1 - baseEyelidReduction) * (this.cameraOffset.eyeOpening ?? 100) / 100
-      : baseEyelidReduction;
+    // Texture and presentation determine the neutral opening, never live/auto.
+    // Apply the operator's eye-opening setting equally to tracked and animated eyes.
+    const baseEyelidReduction = visitorBust ? -0.08 : -0.22;
+    const profileEyelidReduction = 1 - (1 - baseEyelidReduction)
+      * (this.cameraOffset.eyeOpening ?? 100) / 100;
     // Reduce the drawn aperture in every mode, including live camera tracking.
     const eyelidReduction = 1 - (1 - profileEyelidReduction) * 0.8;
     const eyeNow = performance.now();
@@ -1683,7 +1696,7 @@ if (uDepartureMix < 1.0) {
     const isAutonomous = !!trackingResult.isAutonomous;
     this.isAutonomousActive = isAutonomous;
     // Live mouth always comes from the camera, without a synthetic dark cavity.
-    this.useLiveMouthTexture = !isAutonomous;
+    this.useLiveMouthTexture = !isAutonomous && !this.autonomousFallback;
     this.updateVisibility();
 
     // Update 3D Eyeballs, Irises, and Pupils only when their mask is visible.
@@ -1694,7 +1707,7 @@ if (uDepartureMix < 1.0) {
     this.liveBackgroundPlane.scale.set(this.isMirrored ? -renderW : renderW, renderH, 1);
 
     // Synthetic mouth interiors are reserved for autonomous animation.
-    const showMouthInterior = isAutonomous;
+    const showMouthInterior = isAutonomous || this.autonomousFallback;
     this.mouthMesh.visible = this.faceMeshVisible && !this.minimalistMode && showMouthInterior && !this.autonomousFallback;
     // Share the aperture fill across both portraits. Composite it and the teeth
     // after the transparent visitor texture, which otherwise paints over them.

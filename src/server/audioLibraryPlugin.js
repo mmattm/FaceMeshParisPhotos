@@ -14,7 +14,9 @@ export function audioLibraryPlugin({
     .filter(entry => entry.isFile() && EXTENSIONS.has(path.extname(entry.name).toLowerCase()))
     .map(entry => {
       const stat = fs.statSync(path.join(audioDir, entry.name));
-      return { filename: entry.name, url: `/audio/${encodeURIComponent(entry.name)}`, size: stat.size };
+      // Vite's static middleware leaves encoded reserved commas unresolved.
+      const filenameUrl = encodeURIComponent(entry.name).replace(/%2C/gi, ',');
+      return { filename: entry.name, url: `/audio/${filenameUrl}`, size: stat.size };
     }).sort((a, b) => a.filename.localeCompare(b.filename));
 
   const install = server => {

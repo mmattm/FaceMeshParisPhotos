@@ -9,30 +9,50 @@
     "maxYaw": 42,
     "maxPitch": 8,
     "eyeOpening": 100,
-    "audioMouthOpening": 100
+    "audioMouthOpening": 100,
+    "livePitchTrim": 0,
+    "autoPitchTrim": 0
   },
   "autonomous_bust": {
     "x": 0,
     "y": -160,
-    "pitch": 10.5,
+    "pitch": 9,
     "yaw": -3.8,
     "roll": 0,
     "zoom": 2,
     "maxYaw": 32,
-    "maxPitch": 8,
-    "eyeOpening": 120,
-    "audioMouthOpening": 200
+    "maxPitch": 19,
+    "eyeOpening": 98,
+    "audioMouthOpening": 300,
+    "livePitchTrim": 0,
+    "autoPitchTrim": 0
   },
   "minimalist": {
     "x": 0,
-    "y": -54,
-    "pitch": 20.5,
+    "y": 18,
+    "pitch": -8,
     "yaw": 0,
     "roll": 0,
     "zoom": 2,
     "maxYaw": 42,
     "maxPitch": 8,
     "eyeOpening": 100,
-    "audioMouthOpening": 100
+    "audioMouthOpening": 100,
+    "livePitchTrim": 0,
+    "autoPitchTrim": 0
+  },
+  "live_bust": {
+    "x": 0,
+    "y": -160,
+    "pitch": 15.5,
+    "yaw": -3.8,
+    "roll": 0,
+    "zoom": 2,
+    "maxYaw": 32,
+    "maxPitch": 8,
+    "eyeOpening": 98,
+    "audioMouthOpening": 260,
+    "livePitchTrim": 0,
+    "autoPitchTrim": 0
   }
 }

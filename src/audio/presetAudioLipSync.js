@@ -17,10 +17,15 @@ export class PresetAudioLipSync {
     this.startedAt = 0;
     this.jaw = 0;
     this.jawTarget = 0;
+    this.upperLipJaw = 0;
+    this.lowerLipJaw = 0;
     this.peak = 0.06;
     this.rounded = 0;
     this.spread = 0;
     this.lastAnalysisTime = null;
+    this.mouthVariation = { focus: 0, width: 0, asymmetry: 0 };
+    this.mouthVariationTarget = { focus: 0, width: 0, asymmetry: 0 };
+    this.nextMouthVariationAt = 0;
   }
 
   async setEnabled(enabled, context, output) {
@@ -51,9 +56,17 @@ export class PresetAudioLipSync {
     }
     while (this.urls.some(url => !this.buffers.has(url))) {
       await Promise.all(this.urls.filter(url => !this.buffers.has(url)).map(async url => {
-        const response = await fetch(url);
+        const filename = decodeURIComponent(url.split('/').pop());
+        const response = await fetch(url, { cache: 'no-store' });
         if (!response.ok) throw new Error(`Piste audio introuvable : ${url.split('/').pop()} (${response.status}).`);
-        this.buffers.set(url, await context.decodeAudioData(await response.arrayBuffer()));
+        if (response.headers.get('content-type')?.includes('text/html')) {
+          throw new Error(`Le serveur renvoie une page HTML au lieu du fichier audio : ${filename}`);
+        }
+        try {
+          this.buffers.set(url, await context.decodeAudioData(await response.arrayBuffer()));
+        } catch (error) {
+          throw new Error(`Impossible de décoder la piste : ${filename}`, { cause: error });
+        }
       }));
       if (requestId !== this.enableRequestId) return;
     }
@@ -136,6 +149,10 @@ export class PresetAudioLipSync {
     this.durationMs = 0;
     this.jaw = 0;
     this.jawTarget = 0;
+    this.upperLipJaw = this.lowerLipJaw = 0;
+    this.mouthVariation = { focus: 0, width: 0, asymmetry: 0 };
+    this.mouthVariationTarget = { focus: 0, width: 0, asymmetry: 0 };
+    this.nextMouthVariationAt = 0;
     this.peak = 0.06;
     this.rounded = 0;
     this.spread = 0;
@@ -154,6 +171,7 @@ export class PresetAudioLipSync {
       this.rounded = 0;
       this.spread = 0;
       this.lastAnalysisTime = null;
+      this.upperLipJaw = this.lowerLipJaw = 0;
       return null;
     }
     const time = this.context.currentTime;
@@ -186,25 +204,47 @@ export class PresetAudioLipSync {
       spread = 1 - rounded;
     }
     // Short attack and release preserve syllables without abrupt lip motion.
-    this.jawTarget += (target - this.jawTarget) * (1 - Math.exp(-dt / 0.010));
-    const jawResponse = this.jawTarget > this.jaw ? 0.015 : 0.022;
+    this.jawTarget += (target - this.jawTarget) * (1 - Math.exp(-dt / 0.018));
+    const jawResponse = this.jawTarget > this.jaw ? 0.030 : 0.050;
     this.jaw += (this.jawTarget - this.jaw) * (1 - Math.exp(-dt / jawResponse));
     if (target === 0 && this.jaw < 0.0005) this.jaw = this.jawTarget = 0;
-    this.rounded += (rounded - this.rounded) * (1 - Math.exp(-dt / 0.035));
-    this.spread += (spread - this.spread) * (1 - Math.exp(-dt / 0.035));
-    const gain = Number.isFinite(openingPercent) ? Math.max(0, Math.min(200, openingPercent)) / 100 : 1;
+    // Soft tissue leads/lags the heavier mandible instead of moving as one strip.
+    this.upperLipJaw += (this.jawTarget - this.upperLipJaw) * (1 - Math.exp(-dt / 0.025));
+    this.lowerLipJaw += (this.jaw - this.lowerLipJaw) * (1 - Math.exp(-dt / 0.040));
+    this.rounded += (rounded - this.rounded) * (1 - Math.exp(-dt / 0.065));
+    this.spread += (spread - this.spread) * (1 - Math.exp(-dt / 0.080));
+    const gain = Number.isFinite(openingPercent) ? Math.max(0, Math.min(300, openingPercent)) / 100 : 1;
     const jaw = this.jaw * gain;
     const opening = Math.min(1, jaw / 0.06);
     const openingEase = opening * opening * (3 - 2 * opening);
-    const upperLift = jaw * (0.20 + this.spread * 0.10);
+    const upperLift = this.upperLipJaw * gain * (0.20 + this.spread * 0.10);
+    const lowerDrop = this.lowerLipJaw * gain;
+    // Move the deformation's emphasis between syllables, never individual
+    // vertices. Slow interpolation avoids noisy lips and preserves audio timing.
+    if (jaw > 0.015 && time >= this.nextMouthVariationAt) {
+      this.mouthVariationTarget = {
+        focus: (Math.random() * 2 - 1) * 0.10,
+        width: (Math.random() * 2 - 1) * 0.35,
+        asymmetry: (Math.random() * 2 - 1) * 0.12
+      };
+      this.nextMouthVariationAt = time + 0.25 + Math.random() * 0.40;
+    }
+    for (const key of ['focus', 'width', 'asymmetry']) {
+      const targetVariation = jaw > 0.015 ? this.mouthVariationTarget[key] : 0;
+      this.mouthVariation[key] += (targetVariation - this.mouthVariation[key])
+        * (1 - Math.exp(-dt / 0.18));
+    }
     return {
       _audioArticulation: 1,
+      _mouthFocusX: this.mouthVariation.focus,
+      _mouthFocusWidth: this.mouthVariation.width,
+      _mouthAsymmetry: this.mouthVariation.asymmetry,
       jawOpen: jaw,
       mouthClose: 1 - openingEase * 0.85,
       mouthUpperUpLeft: upperLift,
       mouthUpperUpRight: upperLift,
-      mouthLowerDownLeft: jaw * 0.25,
-      mouthLowerDownRight: jaw * 0.25,
+      mouthLowerDownLeft: lowerDrop * 0.25,
+      mouthLowerDownRight: lowerDrop * 0.25,
       mouthStretchLeft: jaw * this.spread * 0.55,
       mouthStretchRight: jaw * this.spread * 0.55,
       mouthFunnel: jaw * this.rounded * 0.25,

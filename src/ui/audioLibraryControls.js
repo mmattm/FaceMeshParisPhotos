@@ -103,7 +103,8 @@ export class AudioLibraryControls {
       }
     }
     this.tracks = (Array.isArray(data.tracks) ? data.tracks : [])
-      .filter(track => typeof track.filename === 'string' && typeof track.url === 'string' && track.url.startsWith('/audio/'));
+      .filter(track => typeof track.filename === 'string' && typeof track.url === 'string' && track.url.startsWith('/audio/'))
+      .map(track => ({ ...track, url: track.url.replace(/%2C/gi, ',') }));
     if (this.previewUrl && !this.tracks.some(track => track.url === this.previewUrl)) this.stopPreview();
     await this.applyTracks();
     this.status.textContent = '';
@@ -184,6 +185,11 @@ export class AudioLibraryControls {
       engine.stopAudio();
       engine.presetAudio.nextTrackIndex = engine.presetAudio.urls.indexOf(track.url);
       if (!engine.presetAudio.play()) throw new Error('Lecture de la piste impossible.');
+      this.testPlayback = {
+        previousForced: this.testPlayback?.previousForced ?? app.forceAutonomousMode,
+        startedAt: engine.presetAudio.startedAt,
+        url: engine.presetAudio.url
+      };
       app.forceAutonomousMode = true;
       document.getElementById('btn-toggle-autonomous')?.classList.add('active');
       this.modal.classList.add('hidden');
@@ -242,6 +248,20 @@ export class AudioLibraryControls {
       this.list.append(card);
     }
     this.updateState();
+  }
+
+  updateTestPlayback() {
+    const test = this.testPlayback;
+    if (!test) return;
+    const app = this.app;
+    const audio = app.autonomousEngine.presetAudio;
+    if (audio.durationMs && audio.startedAt === test.startedAt && audio.url === test.url
+      && audio.elapsedMs < audio.playbackDurationMs) return;
+    this.testPlayback = null;
+    app.forceAutonomousMode = test.previousForced;
+    document.getElementById('btn-toggle-autonomous')?.classList.toggle('active', app.forceAutonomousMode);
+    // The normal presence loop chooses live or autonomous on this same frame.
+    app.updateAnimationPlaybackUI(true);
   }
 
   updateState() {

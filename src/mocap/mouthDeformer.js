@@ -1,4 +1,4 @@
-const UPPER_LIP = new Set([0, 11, 12, 13, 37, 39, 40, 80, 81, 82, 267, 269, 270, 310, 311, 312]);
+const UPPER_LIP = new Set([0, 11, 12, 13, 37, 39, 40, 80, 81, 82, 185, 191, 267, 269, 270, 310, 311, 312, 409, 415]);
 const LOWER_LIP = new Set([14, 15, 16, 17, 84, 85, 86, 87, 88, 91, 95, 146, 178, 179, 180, 181, 314, 315, 316, 317, 318, 321, 324, 375, 402, 403, 405]);
 const CORNERS = new Set([61, 78, 291, 308]);
 const unit = value => Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
@@ -78,13 +78,29 @@ export function deformMouth(base, output, bs, aspectRatio, rigidSkull = new Set(
     const tissue = isLip ? 1 : isBelow
       ? 1 - lowerProgress * 0.45
       : 1 - smooth(Math.abs(localY) / (width * 0.25));
-    const openingWeight = lateral * lateral * tissue;
+    // Rounded vowels narrow the aperture; spread vowels open the sides more.
+    // Both blend continuously into the surrounding tissue at the corners.
+    const spreadShape = unit(bs.mouthStretchLeft) * (1 - side) + unit(bs.mouthStretchRight) * side;
+    // A broad, smooth arch opens the lateral thirds while keeping both corners
+    // attached. Shift the emphasis gently; the shift itself vanishes at the edge.
+    const normalizedX = Math.max(-1, Math.min(1, localX / reach));
+    const focus = bs._audioArticulation ? Math.max(-0.1, Math.min(0.1, bs._mouthFocusX || 0)) : 0;
+    const shiftedX = normalizedX - focus * (1 - Math.abs(normalizedX)) ** 2;
+    const widthVariation = bs._audioArticulation ? Math.max(-0.35, Math.min(0.35, bs._mouthFocusWidth || 0)) : 0;
+    const aperturePower = 3.4 - funnel * 0.7 - pucker * 0.4 + spreadShape * 0.3 + widthVariation;
+    const openingWeight = smooth(1 - Math.abs(shiftedX) ** aperturePower) * tissue;
     const upperUp = unit(bs.mouthUpperUpLeft) * (1 - side) + unit(bs.mouthUpperUpRight) * side;
     const lowerDown = unit(bs.mouthLowerDownLeft) * (1 - side) + unit(bs.mouthLowerDownRight) * side;
     let down = width * openingWeight * (isBelow
       ? jaw * 0.18 + lowerDown * 0.035 + funnel * 0.025
       : -(jaw * 0.045 + upperUp * 0.10 + funnel * 0.025));
     down *= articulationGain;
+    const asymmetry = bs._audioArticulation ? Math.max(-0.12, Math.min(0.12, bs._mouthAsymmetry || 0)) : 0;
+    down *= 1 + asymmetry * (side * 2 - 1);
+    // Small curved mandibular travel, strongest at the chin, gives the lower
+    // face depth while the upper lip stays anchored beneath the nose.
+    const jawArc = jaw * jaw * smooth(lowerProgress) * lateral * lateral;
+    if (isBelow) down += width * jawArc * 0.025 * articulationGain;
 
     const skinX = 1 - smooth((Math.abs(localX) / width - 0.5) / 0.4);
     const skinY = isLip ? 1 : 1 - smooth(Math.abs(localY) / (width * (isBelow ? 0.50 : 0.30)));
@@ -98,7 +114,9 @@ export function deformMouth(base, output, bs, aspectRatio, rigidSkull = new Set(
     output[i].y += uy * out + vy * down;
     // A slight retreat of the mandible and protrusion of rounded lips add
     // volume without shearing the lower lip away from its surrounding skin.
+    const lipRoll = (isUpper ? upperUp : isLower ? lowerDown : 0) * 0.018 * perioral;
     output[i].z += width / ar * (jaw * 0.025 * openingWeight * (isBelow ? 1 : 0)
+      + jawArc * 0.035 - lipRoll
       - (pucker * 0.05 + funnel * 0.035) * perioral);
   }
   return output;

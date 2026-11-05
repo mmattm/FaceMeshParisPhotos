@@ -9,11 +9,14 @@ All library/model files are served locally. No face image or descriptor is sent
 to a recognition service or saved by this experiment. The existing ComfyUI webcam
 upload remains part of a confirmed new visit.
 
-On each arrival allowed by the existing absence timer, MediaPipe supplies a
+Whenever a face is visible, independently of the absence timer, MediaPipe supplies a
 frontal, sufficiently large face. Its eyes align a 150 x 150 crop. The descriptor
 is computed on CPU at most once per 400 ms, with one inference in flight. Three
 consistent samples are required. Only the last accepted visitor's three
 descriptors remain in memory; refreshing the page clears them.
+After each confirmed comparison, monitoring pauses for two seconds before
+checking again. This also detects a person replacing another without leaving
+an empty frame. Comparisons remain suspended during an active visitor generation.
 
 Euclidean distance <= 0.50 confirms the same visitor; >= 0.62 confirms a different
 visitor. The interval between thresholds waits for further evidence. These are
@@ -22,9 +25,10 @@ Unclear, profile, small or failed inputs do not trigger OSC or ComfyUI.
 
 The Recognition button shows the decision and toggles back to absence-only
 detection. The existing manual new-visitor button bypasses recognition and
-refreshes the reference when possible. A different person still needs an arrival
-event from the absence detector: continuous face replacement without an absence
-is not classified by this experiment.
+refreshes the reference when possible. A returning identical visitor receives
+one notification after at least 500 ms out of frame; further comparisons during
+the same continuous presence do not repeat it. Recognition itself does not wait
+for this notification debounce or the configured absence delay.
 
 Timing: identity confirmation, then the existing one-second wait, webcam capture,
 200 ms wait, minimalist transition /newVisitor OSC, and ComfyUI submission.
