@@ -42,6 +42,7 @@ export class FaceTracker {
     this.scaleHelper = new THREE.Vector3();
 
     this.lastVideoTime = -1;
+    this.successfulVideoFrames = 0;
     this.inferenceLatencyMs = 0;
     this.irisSmoothed = new Array(10).fill(null);
     this.mouthSmoothed = new Map();
@@ -186,6 +187,8 @@ export class FaceTracker {
     const formatted = this._formatTrackingResult(results, timestampMs);
     formatted.isNewFrame = true;
     this.lastTrackingResult = formatted;
+    // A successful analysis with no face is still a healthy tracking frame.
+    this.successfulVideoFrames++;
     return formatted;
   }
 

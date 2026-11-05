@@ -91,6 +91,7 @@
     const obsOutput = document.documentElement.classList.contains('obs-output');
 
     function clearVideo() {
+      clearTimeout(recoveryTimeout);
       if (pc) { pc.close(); pc = null; }
       videoEl.srcObject = null;
     }
@@ -105,7 +106,8 @@
     let pc = null;
     let ws = null;
     let hudTimeout = null;
-    const viewerId = `viewer_${Math.floor(Math.random() * 100000)}`;
+    let recoveryTimeout = null;
+    const viewerId = `viewer_${crypto.randomUUID()}`;
     const iceServers = [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' }
@@ -140,9 +142,19 @@
         statusText.textContent = 'En attente de l’émetteur…';
         ws.send(JSON.stringify({ type: 'register', role: 'viewer', viewerId }));
       };
-      ws.onmessage = async event => {
-        try { await handleSignalingMessage(JSON.parse(event.data)); }
-        catch (error) { console.error('[WebRTC Receiver]', error); }
+      // An ICE candidate can arrive while setRemoteDescription is still pending.
+      // Preserve signaling order so it is not silently discarded.
+      let messageQueue = Promise.resolve();
+      const socket = ws;
+      ws.onmessage = event => {
+        messageQueue = messageQueue.then(async () => {
+          if (ws === socket && socket.readyState === WebSocket.OPEN) {
+            await handleSignalingMessage(JSON.parse(event.data));
+          }
+        }).catch(error => {
+          console.error('[WebRTC Receiver]', error);
+          socket.close();
+        });
       };
       ws.onclose = () => {
         clearVideo();
@@ -169,8 +181,10 @@
     }
 
     async function handleOffer(message) {
+      clearTimeout(recoveryTimeout);
       if (pc) { try { pc.close(); } catch (error) {} }
       pc = new RTCPeerConnection({ iceServers });
+      const connection = pc;
       pc.ontrack = event => {
         if (event.streams?.[0]) videoEl.srcObject = event.streams[0];
         else {
@@ -190,18 +204,26 @@
         }
       };
       pc.onconnectionstatechange = () => {
-        if (!pc) return;
+        if (pc !== connection) return;
         if (pc.connectionState === 'connected') {
+          clearTimeout(recoveryTimeout);
           statusDot.className = 'status-dot connected';
           statusText.textContent = 'FLUX WEBRTC DIRECT // CONNECTÉ';
           waitingScreen.classList.add('hidden');
         } else if (['disconnected', 'failed'].includes(pc.connectionState)) {
-          videoEl.srcObject = null;
           statusDot.className = 'status-dot disconnected';
           statusText.textContent = 'Flux interrompu. En attente…';
           waitingScreen.classList.remove('hidden');
+          // Re-register to obtain a fresh offer if the peer cannot recover.
+          clearTimeout(recoveryTimeout);
+          recoveryTimeout = setTimeout(() => {
+            if (pc === connection && connection.connectionState !== 'connected') ws?.close();
+          }, 3000);
         }
       };
+      recoveryTimeout = setTimeout(() => {
+        if (pc === connection && connection.connectionState !== 'connected') ws?.close();
+      }, 15000);
 
       await pc.setRemoteDescription(new RTCSessionDescription(message.sdp));
       const answer = await pc.createAnswer();

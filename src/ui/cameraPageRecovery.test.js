@@ -2,14 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CameraPageRecovery } from './cameraPageRecovery.js';
 
-function fixture({ storage, canReload } = {}) {
+function fixture({ storage, canReload, getTrackingProgress } = {}) {
   const values = new Map();
   storage ??= { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
   const track = { readyState: 'live', muted: false };
   const camera = { state: 'active', video: { readyState: 2, paused: false, currentTime: 0 },
     stream: { getVideoTracks: () => [track] } };
   let reloads = 0;
-  const recovery = new CameraPageRecovery({ camera, storage, canReload, reload: () => { reloads++; } });
+  const recovery = new CameraPageRecovery({ camera, storage, canReload, getTrackingProgress, reload: () => { reloads++; } });
   return { camera, track, recovery, storage, reloads: () => reloads };
 }
 
@@ -21,6 +21,44 @@ test('a healthy webcam never reloads, including when no visitor is present', () 
   }
   assert.equal(reloads(), 0);
   assert.equal(recovery.message, '');
+});
+
+test('successful tracking analyses without a detected visitor never reload', () => {
+  let analyses = 0;
+  const { camera, recovery, reloads } = fixture({ getTrackingProgress: () => analyses });
+  for (let now = 0; now <= 300000; now += 5000) {
+    camera.video.currentTime = now / 1000;
+    analyses++;
+    recovery.check(now);
+  }
+  assert.equal(reloads(), 0);
+  assert.equal(recovery.message, '');
+});
+
+test('tracking stalled despite advancing camera frames reloads after 30 seconds', () => {
+  const { camera, recovery, reloads } = fixture({ getTrackingProgress: () => 10 });
+  for (let now = 0; now < 30000; now += 5000) {
+    camera.video.currentTime = now / 1000;
+    recovery.check(now);
+  }
+  assert.equal(reloads(), 0);
+  camera.video.currentTime = 30;
+  recovery.check(30000);
+  assert.equal(reloads(), 1);
+});
+
+test('tracking recovery before the deadline cancels reload', () => {
+  let analyses = 10;
+  const { camera, recovery, reloads } = fixture({ getTrackingProgress: () => analyses });
+  recovery.check(0);
+  camera.video.currentTime = 25;
+  recovery.check(25000);
+  for (let now = 30000; now <= 90000; now += 5000) {
+    analyses++;
+    camera.video.currentTime = now / 1000;
+    recovery.check(now);
+  }
+  assert.equal(reloads(), 0);
 });
 
 test('an ended stream reloads after 30 seconds, once per page', () => {

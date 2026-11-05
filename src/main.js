@@ -8,6 +8,7 @@
 import { CameraManager } from './core/camera.js';
 import { setupExhibitionMode } from './ui/exhibitionMode.js';
 import { CameraPageRecovery } from './ui/cameraPageRecovery.js';
+import { AutonomousTimeout } from './ui/autonomousTimeout.js';
 import { FaceTracker } from './core/tracker.js';
 import { FaceMeshRenderer } from './core/renderer.js';
 import { ExpressionLooper } from './mocap/expressionLooper.js';
@@ -42,6 +43,7 @@ class App {
     try { recoveryStorage = sessionStorage; } catch { /* Camera reconnection remains available. */ }
     this.cameraPageRecovery = new CameraPageRecovery({
       camera: this.camera, storage: recoveryStorage, reload: () => window.location.reload(),
+      getTrackingProgress: () => this.tracker.successfulVideoFrames,
       canReload: () => !this.isVisitorDetectionBlocked()
     });
     this.tracker = new FaceTracker({ smoothing: true });
@@ -151,6 +153,9 @@ class App {
     this.lastFaceDetectedTime = 0;
     this.consecutiveDetectedFrames = 0;
     this.forceAutonomousMode = false;
+    let autonomousTimeoutSeconds = 60;
+    try { autonomousTimeoutSeconds = localStorage.getItem('photomaton_autonomous_timeout_s') ?? 60; } catch { /* Use default. */ }
+    this.autonomousTimeout = new AutonomousTimeout(autonomousTimeoutSeconds);
     this.forceFallbackFace = false;
 
     // Last known tracking frames for seamless handoff
@@ -215,6 +220,9 @@ class App {
 
       try {
         await this.audioLibrary.refresh();
+        if (this.autonomousEngine.presetAudio.urls.length) {
+          document.getElementById('btn-preset-audio')?.click();
+        }
       } catch (error) {
         this.audioLibrary.report(error);
       }
@@ -364,12 +372,22 @@ class App {
       this.syncFaceTextureButton();
     });
     const btnAutonomous = document.getElementById('btn-toggle-autonomous');
+    const timeoutInput = document.getElementById('autonomous-timeout-seconds');
+    if (timeoutInput) {
+      timeoutInput.value = this.autonomousTimeout.seconds;
+      timeoutInput.addEventListener('change', () => {
+        this.autonomousTimeout.setSeconds(timeoutInput.value);
+        timeoutInput.value = this.autonomousTimeout.seconds;
+        try { localStorage.setItem('photomaton_autonomous_timeout_s', String(this.autonomousTimeout.seconds)); } catch { /* Keep for this session. */ }
+      });
+    }
     btnAutonomous?.addEventListener('click', () => {
       if (this.presetRecorder.isRecording) {
         alert("Arrêtez d'abord l'enregistrement du preset.");
         return;
       }
       this.forceAutonomousMode = !this.forceAutonomousMode;
+      this.autonomousTimeout.startedAt = null;
       if (this.audioLibrary) this.audioLibrary.testPlayback = null;
       btnAutonomous.classList.toggle('active', this.forceAutonomousMode);
       if (this.forceAutonomousMode) {
@@ -657,6 +675,15 @@ class App {
 
   setupPresetAudioControls() {
     const button = document.getElementById('btn-preset-audio');
+    // Chrome can defer startup audio until the first user interaction.
+    const unlockAudio = () => {
+      const context = this.autonomousEngine.audioCtx;
+      if (context?.state === 'suspended') {
+        void context.resume().catch(error => console.warn('Audio resume:', error));
+      }
+    };
+    document.addEventListener('pointerdown', unlockAudio);
+    document.addEventListener('keydown', unlockAudio);
     button?.addEventListener('click', async () => {
       if (this.presetAudioLoading) return;
       const enabled = !this.autonomousEngine.presetAudio.enabled;
@@ -1653,6 +1680,16 @@ class App {
 
     const loop = () => {
       const now = performance.now();
+      if (this.autonomousTimeout.update(this.forceAutonomousMode, now)
+        && !this.isVisitorDetectionBlocked() && !this.presetRecorder.isRecording) {
+        this.forceAutonomousMode = false;
+        this.autonomousTimeout.update(false, now);
+        document.getElementById('btn-toggle-autonomous')?.classList.remove('active');
+        if (this.audioLibrary) this.audioLibrary.testPlayback = null;
+        this.showNotification('Retour automatique au suivi caméra', '', 3000, 'autonomous-timeout');
+        // The normal presence logic below decides whether to return to live.
+        // Without a visitor, autonomous playback continues without being forced.
+      }
       // Reuse the active camera stream, including after a camera switch or stop.
       if (this.webcamPreviewEl && this.webcamPreviewEl.srcObject !== this.videoEl.srcObject) {
         this.tracker.lastVideoTime = -1;
@@ -1686,6 +1723,13 @@ class App {
           : rawTracking?.proximityPending ? ' · stabilisation' : ''}` : 'Aucun visage';
       }
       this.liveFaceTextureGate.update(rawTracking, now, this.faceProximityGate.thresholdPercent / 100);
+      if (rawTracking?.detected && rawTracking.landmarks?.length && this.forceAutonomousMode) {
+        this.forceAutonomousMode = false;
+        this.autonomousTimeout.update(false, now);
+        document.getElementById('btn-toggle-autonomous')?.classList.remove('active');
+        if (this.audioLibrary) this.audioLibrary.testPlayback = null;
+        // The presence logic below stops autonomous playback and blends to live.
+      }
       const liveStatus = document.getElementById('webcam-live-status');
       if (liveStatus) {
         const gate = this.liveFaceTextureGate;
@@ -2017,6 +2061,12 @@ class App {
     // Continue tracking presence, but ignore new visits during the current
     // minimalist render and its one-second video-return delay.
     if (this.isVisitorDetectionBlocked()) return;
+    // A new visitor takes control immediately, even during forced playback.
+    this.forceAutonomousMode = false;
+    this.autonomousTimeout.update(false, performance.now());
+    document.getElementById('btn-toggle-autonomous')?.classList.remove('active');
+    if (this.audioLibrary) this.audioLibrary.testPlayback = null;
+    this.autonomousEngine.stopAutonomous();
     this.showNotification(detail.identityConfirmed ? 'Nouveau visiteur reconnu'
       : 'Nouveau visiteur détecté', 'success', 15000, 'visitor-result');
     // Invalidate old render monitors immediately, before the one-second delay.

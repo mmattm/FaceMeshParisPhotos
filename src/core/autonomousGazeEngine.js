@@ -238,7 +238,7 @@ export class AutonomousGazeEngine extends EventTarget {
   }
 
   setPresetExpressionIntensity(value) {
-    if (Number.isFinite(value)) this.presetExpressionIntensity = Math.max(0.5, Math.min(2.2, value));
+    if (Number.isFinite(value)) this.presetExpressionIntensity = Math.max(0.5, Math.min(5, value));
   }
 
   amplifyPresetExpressions(neutral, expressive, preserveSpeech = false) {

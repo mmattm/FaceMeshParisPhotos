@@ -467,9 +467,14 @@
         <button id="btn-close-general-settings" class="tool-btn" type="button" aria-label="Fermer les réglages">Fermer</button>
       </div>
       <div class="general-settings-fields">
+          <label class="blend-control" for="autonomous-timeout-seconds">
+            <span>Retour au tracking après autonome forcé :</span>
+            <input id="autonomous-timeout-seconds" type="number" min="0" max="3600" step="1" value="60" style="width: 80px;">
+            <span>s (0 = désactivé)</span>
+          </label>
           <label class="blend-control" for="slider-expression-intensity" title="Intensité des sourcils, du regard et du sourire pendant les presets">
             <span>Expressions</span>
-            <input type="range" id="slider-expression-intensity" class="blend-slider" min="50" max="220" step="10" value="160" style="width: 85px;">
+            <input type="range" id="slider-expression-intensity" class="blend-slider" min="50" max="500" step="10" value="160" style="width: 85px;">
             <span id="expression-intensity-value">160%</span>
           </label>
           <div class="blend-control"

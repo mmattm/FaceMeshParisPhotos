@@ -1,10 +1,11 @@
 const RELOAD_KEY = 'photomaton_camera_page_reload_at';
 
-// Reconnect the camera first; reload only when no video frames recover for 30 s.
+// Camera reconnects independently; also watch successful live tracking analyses.
 export class CameraPageRecovery {
   constructor({ camera, storage, reload, canReload = () => true, now = Date.now,
-    outageMs = 30000, cooldownMs = 120000 }) {
-    Object.assign(this, { camera, storage, reload, canReload, now, outageMs, cooldownMs });
+    outageMs = 30000, cooldownMs = 120000, getTrackingProgress = null }) {
+    Object.assign(this, { camera, storage, reload, canReload, now, outageMs, cooldownMs, getTrackingProgress });
+    this.lastTrackingProgress = null;
     this.outageSince = null;
     this.lastStream = null;
     this.lastVideoTime = null;
@@ -31,6 +32,7 @@ export class CameraPageRecovery {
       this.outageSince = null;
       this.lastStream = null;
       this.lastVideoTime = null;
+      this.lastTrackingProgress = null;
       this.message = '';
       return;
     }
@@ -43,7 +45,11 @@ export class CameraPageRecovery {
       && Number.isFinite(this.lastVideoTime) && video.currentTime > this.lastVideoTime;
     this.lastStream = camera.stream;
     this.lastVideoTime = ready ? video.currentTime : null;
-    if (progressing) {
+    const trackingProgress = this.getTrackingProgress?.();
+    const trackingHealthy = !this.getTrackingProgress || (Number.isFinite(trackingProgress)
+      && this.lastTrackingProgress !== null && trackingProgress > this.lastTrackingProgress);
+    this.lastTrackingProgress = trackingProgress ?? null;
+    if (progressing && trackingHealthy) {
       this.outageSince = null;
       this.message = '';
       return;
@@ -52,11 +58,11 @@ export class CameraPageRecovery {
     this.outageSince ??= now;
     const remaining = this.outageMs - (now - this.outageSince);
     if (remaining > 0) {
-      this.message = `Contrôle du flux · rechargement de secours dans ${Math.ceil(remaining / 1000)} s`;
+      this.message = `Contrôle caméra / tracking · rechargement de secours dans ${Math.ceil(remaining / 1000)} s`;
       return;
     }
     if (!this.canReload()) {
-      this.message = 'Flux webcam perdu · rechargement après le rendu en cours';
+      this.message = 'Caméra ou tracking bloqué · rechargement après le rendu en cours';
       return;
     }
 
@@ -75,7 +81,7 @@ export class CameraPageRecovery {
       this.message = 'Reconnexion en cours · rechargement automatique indisponible';
       return;
     }
-    this.message = 'Flux webcam perdu · rechargement de la page…';
+    this.message = 'Caméra ou tracking bloqué · rechargement de la page…';
     this.reloading = true;
     try { this.reload(); }
     catch (error) {
