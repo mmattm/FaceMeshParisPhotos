@@ -90,6 +90,14 @@
     const btnAudio = document.getElementById('btn-audio');
     const obsOutput = document.documentElement.classList.contains('obs-output');
 
+    // Let the local OBS wrapper know this page loaded successfully. WebSocket
+    // reconnection handles server restarts while this page remains alive.
+    if (obsOutput && window.parent !== window) {
+      const notifyObsWrapper = () => window.parent.postMessage({ type: 'photomaton-receiver-alive' }, '*');
+      notifyObsWrapper();
+      setInterval(notifyObsWrapper, 2000);
+    }
+
     function clearVideo() {
       clearTimeout(recoveryTimeout);
       if (pc) { pc.close(); pc = null; }

@@ -1906,6 +1906,14 @@ class App {
         this.lastFpsTime = now;
       }
 
+      const startupToken = new URLSearchParams(location.search).get('startup');
+      if (import.meta.env.DEV && startupToken && !this.startupReadySent && !this.startupReadyPending) {
+        this.startupReadyPending = true;
+        fetch(`/api/startup-ready?token=${encodeURIComponent(startupToken)}`, { method: 'POST' })
+          .then(response => { this.startupReadySent = response.ok; })
+          .catch(() => {})
+          .finally(() => { this.startupReadyPending = false; });
+      }
       this.rafId = requestAnimationFrame(loop);
     };
 

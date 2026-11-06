@@ -10,6 +10,29 @@ import { uploadComfyVisitorImage } from './src/server/comfyVisitorImage.js';
 import { normalizePeerAddress, sendNewVisitorOsc } from './src/server/visitorOsc.js';
 import { ComfyLatestRequest } from './src/server/comfyLatestRequest.js';
 
+function startupReadyPlugin() {
+  const ready = new Set();
+  return {
+    name: 'startup-ready',
+    configureServer(server) {
+      server.middlewares.use('/api/startup-ready', (req, res) => {
+        const token = new URL(req.url, 'http://localhost').searchParams.get('token');
+        res.setHeader('Cache-Control', 'no-store');
+        if (!token || !/^[a-f0-9-]{36}$/.test(token)) {
+          res.statusCode = 400;
+        } else if (req.method === 'POST') {
+          if (ready.size > 100) ready.clear();
+          ready.add(token);
+          res.statusCode = 204;
+        } else {
+          res.statusCode = ready.has(token) ? 200 : 503;
+        }
+        res.end();
+      });
+    }
+  };
+}
+
 let kokoroTTSInstance = null;
 async function getKokoro() {
   if (!kokoroTTSInstance) {
@@ -538,7 +561,7 @@ function comfyUiServerPlugin() {
 }
 
 export default defineConfig({
-  plugins: [ttsServerPlugin(), animationsServerPlugin(), webrtcSignalingPlugin(), comfyUiServerPlugin(), audioLibraryPlugin(), alignmentSettingsPlugin()],
+  plugins: [startupReadyPlugin(), ttsServerPlugin(), animationsServerPlugin(), webrtcSignalingPlugin(), comfyUiServerPlugin(), audioLibraryPlugin(), alignmentSettingsPlugin()],
   server: {
     port: 5173,
     host: true

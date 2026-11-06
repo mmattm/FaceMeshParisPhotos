@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Photomaton — source OBS</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+    iframe { width: 100%; height: 100%; border: 0; }
+  </style>
+</head>
+<body>
+  <iframe id="receiver" title="Sortie Photomaton" allow="autoplay" ></iframe>
+  <script>
+    // This local file loads even when OBS starts before the HTTP server.
+    const receiver = document.getElementById('receiver');
+    const serverOrigin = 'http://127.0.0.1:5173';
+    let lastHeartbeat = 0;
+    window.addEventListener('message', event => {
+      if (event.source === receiver.contentWindow && event.origin === serverOrigin &&
+          event.data?.type === 'photomaton-receiver-alive') {
+        lastHeartbeat = Date.now();
+      }
+    });
+    function recover() {
+      if (Date.now() - lastHeartbeat < 15000) return;
+      lastHeartbeat = Date.now();
+      receiver.src = `${serverOrigin}/receiver.html?output=obs&startup=${Date.now()}`;
+    }
+    recover();
+    setInterval(recover, 5000);
+  </script>
+</body>
+</html>
