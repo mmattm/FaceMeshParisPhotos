@@ -274,14 +274,14 @@ export class AutonomousGazeEngine extends EventTarget {
     const context = enabled ? this.ensureAudioContext() : this.audioCtx;
     await this.presetAudio.setEnabled(enabled, context, this.audioGainNode);
     if (enabled && this.presetAudio.enabled && this.isActive) {
-      this.scheduleNextPresetAudio(performance.now());
+      this.scheduleNextPresetAudio(performance.now(), true);
     }
   }
 
   async setPresetAudioTracks(urls) {
     await this.presetAudio.setTracks(urls);
     if (this.isActive && this.presetAudio.enabled && !this.presetAudio.durationMs) {
-      this.scheduleNextPresetAudio(performance.now());
+      this.scheduleNextPresetAudio(performance.now(), true);
     }
   }
 
@@ -289,12 +289,26 @@ export class AutonomousGazeEngine extends EventTarget {
     return now - this.animStartTime;
   }
 
-  scheduleNextPresetAudio(now) {
-    this.nextAudioStartTime = now + 10000 + Math.random() * 5000;
+  scheduleNextPresetAudio(now, firstTrack = false) {
+    this.nextAudioStartTime = now + (firstTrack
+      ? 6000 + Math.random() * 2000
+      : 20000 + Math.random() * 40000);
+  }
+
+  setComfyAudioBlocked(blocked, now = performance.now()) {
+    this.comfyAudioBlocked = blocked;
+    this.stopAudio();
+    this.audioResumeTime = blocked ? Infinity : now + 6000 + Math.random() * 2000;
+    this.nextAudioStartTime = this.audioResumeTime;
+  }
+
+  canPlayAudio(now = performance.now()) {
+    return !this.comfyAudioBlocked && now >= (this.audioResumeTime || 0);
   }
 
   updatePresetAudioPlayback(now) {
     const audio = this.presetAudio;
+    if (!this.canPlayAudio(now)) return;
     if (!this.isActive || !this.baseLandmarks?.length || !audio.enabled || audio.previewing) return;
     if (this.activeAnimation?.hasAudio || this.activeAnimation?.audioData || this.activeAnimation?._audioBuffer) return;
     if (audio.durationMs) {
@@ -419,7 +433,7 @@ export class AutonomousGazeEngine extends EventTarget {
     this.isActive = true;
     this.lastRenderedLandmarks = null;
     this.lastPoseLandmarks = null;
-    this.scheduleNextPresetAudio(now);
+    this.scheduleNextPresetAudio(now, true);
 
     if (initialLandmarks && initialLandmarks.length > 0) {
       this.transFromLandmarks = initialLandmarks.map(p => ({
@@ -518,7 +532,7 @@ export class AutonomousGazeEngine extends EventTarget {
     const delaySec = Math.max(0, Math.min(4.0, this.audioDelaySec ?? 2.2));
 
     // Start sub-millisecond audio playback via Web Audio API AudioBufferSourceNode with delay offset
-    if (anim._audioBuffer && this.audioCtx && !this.presetAudio.previewing) {
+    if (anim._audioBuffer && this.audioCtx && !this.presetAudio.previewing && this.canPlayAudio(now)) {
       try {
         const source = this.audioCtx.createBufferSource();
         source.buffer = anim._audioBuffer;
@@ -531,10 +545,10 @@ export class AutonomousGazeEngine extends EventTarget {
       } catch (e) {
         console.warn('[AutonomousGaze] Web Audio buffer playback error:', e);
       }
-    } else if (anim.hasAudio && anim.audioData && !this.presetAudio.previewing) {
+    } else if (anim.hasAudio && anim.audioData && !this.presetAudio.previewing && this.canPlayAudio(now)) {
       if (this.animLibrary) {
         this.animLibrary.decodeAudioBuffer(anim).then(buf => {
-          if (buf && this.activeAnimation === anim && this.audioCtx && !this.presetAudio.previewing) {
+          if (buf && this.activeAnimation === anim && this.audioCtx && !this.presetAudio.previewing && this.canPlayAudio()) {
             try {
               const source = this.audioCtx.createBufferSource();
               source.buffer = buf;

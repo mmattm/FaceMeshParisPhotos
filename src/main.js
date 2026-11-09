@@ -1360,8 +1360,17 @@ class App {
     if (!this.comfyMinimalistJobs.size) this.setMinimalistMode(this.comfyPreviousMinimalist);
   }
 
+  endComfyAudioJob(token) {
+    if (!this.comfyAudioJobs?.delete(token)) return;
+    if (!this.comfyAudioJobs.size) this.autonomousEngine.setComfyAudioBlocked(false);
+  }
+
   async queueComfyWorkflow(settings, visitorGeneration = false) {
     const callId = ++this.comfyCallId;
+    const audioToken = Symbol('comfy-audio');
+    this.comfyAudioJobs ??= new Set();
+    this.comfyAudioJobs.add(audioToken);
+    this.autonomousEngine.setComfyAudioBlocked(true);
     let minimalistToken = null;
     this.showNotification('Appel à ComfyUI…', 'running', 0, 'comfy-call');
     try {
@@ -1370,7 +1379,10 @@ class App {
         // Capture while the booth is lit, before the minimalist transition
         // sends /newVisitor to the lighting controller.
         await new Promise(resolve => setTimeout(resolve, 200));
-        if (callId !== this.comfyCallId) return { superseded: true };
+        if (callId !== this.comfyCallId) {
+          this.endComfyAudioJob(audioToken);
+          return { superseded: true };
+        }
         minimalistToken = this.beginComfyMinimalistJob();
       }
       const response = await fetch('/api/comfy/queue', {
@@ -1385,16 +1397,18 @@ class App {
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || `Erreur ${response.status}`);
       if (result.superseded || callId !== this.comfyCallId) {
+        this.endComfyAudioJob(audioToken);
         this.endComfyMinimalistJob(minimalistToken);
         return { superseded: true };
       }
       if (!result.promptId) throw new Error('ComfyUI n’a pas renvoyé de prompt ID');
-      this.monitorComfyRender({ ...result, baseUrl: settings.baseUrl, minimalistToken, callId });
+      this.monitorComfyRender({ ...result, baseUrl: settings.baseUrl, minimalistToken, audioToken, callId });
       if (callId === this.comfyCallId) {
         this.showNotification('Workflow ComfyUI envoyé', 'success', 3000, 'comfy-call');
       }
       return result;
     } catch (error) {
+      this.endComfyAudioJob(audioToken);
       this.endComfyMinimalistJob(minimalistToken);
       if (callId !== this.comfyCallId) return { superseded: true };
       if (callId === this.comfyCallId) {
@@ -1434,6 +1448,7 @@ class App {
         if (render.callId !== this.comfyCallId) return;
         if (status.state === 'pending') continue;
         const detail = { ...render, outputs: status.outputs, error: status.error };
+        this.endComfyAudioJob(render.audioToken);
         if (status.state === 'completed') {
           this.showNotification('Rendu ComfyUI terminé', 'success', 8000, key);
           window.dispatchEvent(new CustomEvent('comfy:render-completed', { detail }));
@@ -1458,6 +1473,7 @@ class App {
         return;
       }
     } finally {
+      this.endComfyAudioJob(render.audioToken);
       this.endComfyMinimalistJob(render.minimalistToken);
     }
   }
